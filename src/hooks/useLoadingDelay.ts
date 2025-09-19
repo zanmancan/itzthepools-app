@@ -1,4 +1,4 @@
-// hooks/useLoadingDelay.ts
+// src/hooks/useLoadingDelay.ts
 import { useEffect, useState } from "react";
 
 /**

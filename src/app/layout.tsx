@@ -1,3 +1,4 @@
+// src/app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
 import { supabaseServer } from "@/lib/supabaseServer";
@@ -6,7 +7,7 @@ import ToastProvider from "@/components/Toast";
 
 export const metadata: Metadata = {
   title: "Itz The Pools",
-  description: "Multi-league, multi-sport pools"
+  description: "Multi-league, multi-sport pools platform",
 };
 
 export default async function RootLayout({
@@ -14,17 +15,31 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // Server-side check for an authenticated user (safe to call in a layout)
   const sb = supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
 
   return (
     <html lang="en">
-      <body className="min-h-screen bg-black text-zinc-100">
-        <div className="container mx-auto px-6">
+      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+        {/* Skip link for a11y */}
+        <a
+          href="#app-main"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:rounded-md focus:bg-neutral-800 focus:px-3 focus:py-2"
+        >
+          Skip to content
+        </a>
+
+        {/* Site chrome */}
+        <div className="container">
           <Nav isAuthed={!!user} />
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+
+          {/* Main app content */}
+          <main id="app-main" role="main" className="mt-6" data-testid="app-main">
+            <ToastProvider>{children}</ToastProvider>
+          </main>
         </div>
       </body>
     </html>

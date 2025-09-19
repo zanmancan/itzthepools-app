@@ -1,4 +1,4 @@
-// components/EmptyState.tsx
+// src/components/EmptyState.tsx
 "use client";
 
 import { ReactNode } from "react";

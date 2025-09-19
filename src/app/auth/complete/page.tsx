@@ -1,7 +1,8 @@
+// src/app/auth/complete/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 /**
@@ -10,8 +11,11 @@ import { supabase } from "@/lib/supabaseClient";
  * If the link is invalid/expired/reused, there is no session and we show an error.
  */
 export default function CompleteSignupPage() {
-  const params = useSearchParams();
-  const next = params.get("next") ?? "/dashboard";
+  const params = useSearchParams(); // client hook
+  const router = useRouter();
+
+  // ✅ Type-safe access: guard with optional chaining so strict TS is happy
+  const next = params?.get("next") ?? "/dashboard";
 
   const [ready, setReady] = useState(false);
   const [password, setPassword] = useState("");
@@ -23,11 +27,11 @@ export default function CompleteSignupPage() {
     let mounted = true;
 
     // If this page is loaded from a valid verification link, we should have a session.
-    // Use an async IIFE and mark it as intentionally not awaited.
     void (async () => {
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.getSession();
         if (!mounted) return;
+        if (error) throw error;
         if (data.session) {
           setReady(true);
         } else {
@@ -51,7 +55,8 @@ export default function CompleteSignupPage() {
 
     return () => {
       mounted = false;
-      authListener.subscription.unsubscribe();
+      // defensive: in case the subscription is undefined for some reason
+      authListener?.subscription?.unsubscribe();
     };
   }, []);
 
@@ -64,9 +69,11 @@ export default function CompleteSignupPage() {
       if (error) throw error;
 
       setMsg("Password set. Redirecting…");
-      // After setting password, keep them signed in & send to their next page
+      // Keep them signed in & send to their next page
       setTimeout(() => {
-        location.href = next;
+        // router.replace keeps history tidy; either works
+        router.replace(next);
+        // window.location.href = next;
       }, 700);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
@@ -77,10 +84,12 @@ export default function CompleteSignupPage() {
   }
 
   return (
-    <div className="card max-w-md space-y-4">
+    <div className="card max-w-md space-y-4" data-testid="complete-signup">
       <div className="h1">Finish creating your account</div>
 
-      {!ready && !err && <p className="opacity-70">Validating verification link…</p>}
+      {!ready && !err && (
+        <p className="opacity-70">Validating verification link…</p>
+      )}
       {err && <p className="text-red-400">{err}</p>}
 
       {ready && (
@@ -88,14 +97,18 @@ export default function CompleteSignupPage() {
           <p className="opacity-80">
             Your email is verified. Please set a password to continue.
           </p>
+
           <input
             className="input"
             type="password"
             placeholder="New password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            minLength={8}
           />
-          {/* call pattern: wrap async call and mark as fire-and-forget */}
+
+          {/* Fire-and-forget pattern for async click */}
           <button
             className="btn"
             disabled={busy || password.length < 8}
@@ -105,8 +118,11 @@ export default function CompleteSignupPage() {
           >
             {busy ? "Saving…" : "Set password"}
           </button>
+
           {msg && <p className="text-emerald-400">{msg}</p>}
-          <p className="opacity-60 text-sm">Minimum 8 characters (or your configured policy).</p>
+          <p className="text-sm opacity-60">
+            Minimum 8 characters (or your configured policy).
+          </p>
         </>
       )}
     </div>

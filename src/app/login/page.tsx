@@ -1,15 +1,20 @@
+// src/app/login/page.tsx
 "use client";
 
 import { useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
   const params = useSearchParams();
-  const next = params.get("next") ?? "/dashboard";
+  const router = useRouter();
+
+  // Strict-safe read of ?next=
+  const next = params?.get("next") ?? "/dashboard";
 
   // Two tabs: Sign in (password) and Create account (email verification)
-  const [tab, setTab] = useState<"signin" | "signup">("signin");
+  const [tab, setTab] =
+    useState<"signin" | "signup">("signin");
 
   // shared
   const [email, setEmail] = useState("");
@@ -25,10 +30,14 @@ export default function LoginPage() {
     setErr(null);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
       if (error) throw error;
       // success
-      location.href = next;
+      router.replace(next);
+      // or: window.location.href = next;
     } catch (e: any) {
       setErr(e?.message ?? "Sign in failed");
     } finally {
@@ -47,7 +56,9 @@ export default function LoginPage() {
         email,
         options: {
           shouldCreateUser: true,
-          emailRedirectTo: `${location.origin}/auth/complete?next=${encodeURIComponent(next)}`,
+          emailRedirectTo: `${location.origin}/auth/complete?next=${encodeURIComponent(
+            next
+          )}`,
         },
       });
       if (error) throw error;
@@ -116,9 +127,7 @@ export default function LoginPage() {
             <button
               className="btn"
               disabled={busy}
-              onClick={() => {
-                void signIn();
-              }}
+              onClick={() => void signIn()}
             >
               {busy ? "Signing in…" : "Sign in"}
             </button>
@@ -126,9 +135,7 @@ export default function LoginPage() {
               className="btn"
               disabled={busy || !email}
               title="Send password reset to the email above"
-              onClick={() => {
-                void sendReset();
-              }}
+              onClick={() => void sendReset()}
             >
               {busy ? "Sending…" : "Forgot password"}
             </button>
@@ -141,15 +148,12 @@ export default function LoginPage() {
           <button
             className="btn"
             disabled={busy || !email}
-            onClick={() => {
-              void startEmailVerification();
-            }}
+            onClick={() => void startEmailVerification()}
           >
             {busy ? "Sending…" : "Send verification link"}
           </button>
-          <p className="opacity-70 text-sm">
-            After verifying your email, you’ll be asked to set a password. Future logins require
-            your password.
+          <p className="text-sm opacity-70">
+            After verifying your email, you’ll be asked to set a password. Future logins require your password.
           </p>
         </>
       )}

@@ -1,12 +1,9 @@
 // playwright.config.ts
 import { defineConfig, devices } from "@playwright/test";
 
-/**
- * We default to your local Next port 3001 (matches package.json scripts).
- * Override with PLAYWRIGHT_BASE_URL if needed in CI or locally.
- */
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${PORT}`;
+const PORT = Number(process.env.PORT ?? 3001);
+const HOST = process.env.PLAYWRIGHT_HOST || "localhost";
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://${HOST}:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -18,29 +15,15 @@ export default defineConfig({
     baseURL: BASE_URL,
     trace: "retain-on-failure",
   },
-  webServer: process.env.CI
-    ? [
-        // In CI we start the already-built Next app
-        {
-          command: `npx next start -p ${PORT}`,
-          url: BASE_URL,
-          timeout: 120_000,
-          reuseExistingServer: !process.env.CI,
-        },
-      ]
-    : [
-        // Local dev run
-        {
-          command: `npx next dev -p ${PORT}`,
-          url: BASE_URL,
-          timeout: 120_000,
-          reuseExistingServer: true,
-        },
-      ],
-  projects: [
+  webServer: [
     {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
-    },
+      command: `node ./node_modules/next/dist/bin/next start -p ${PORT}`,
+      url: BASE_URL,       // waits for "/" to be 200
+      timeout: 60_000,     // shorter wait
+      reuseExistingServer: true
+    }
+  ],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } }
   ],
 });

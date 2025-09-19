@@ -1,4 +1,4 @@
-// components/LoadingSpinner.tsx
+// src/components/LoadingSpinner.tsx
 "use client";
 
 import { useId } from "react";

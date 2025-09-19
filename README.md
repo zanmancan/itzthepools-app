@@ -21,5 +21,3 @@ Multi-league, multi-sport pools platform (PWA → iOS/Android). This repo hosts 
 - Execution checklist lives in our internal plan.
 - Contribution rules → `CONTRIBUTING.md`
 - Security contact → `SECURITY.md`
-
-ok

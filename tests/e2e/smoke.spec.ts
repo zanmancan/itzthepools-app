@@ -1,10 +1,11 @@
+// tests/e2e/smoke.spec.ts
 import { test, expect } from "@playwright/test";
 
 test("home renders HTML and not 404", async ({ page }) => {
-  await page.goto("/");
+  const res = await page.goto("/");
+  expect(res?.status()).toBe(200);
+  // Be resilient across App Router vs Pages fallback
   await expect(page.locator("body")).toBeVisible();
-  // Assert the page has some visible non-whitespace text anywhere in <body>
-  await expect(page.locator("body")).toContainText(/\S/);
 });
 
 test("unknown route hits 404", async ({ page }) => {

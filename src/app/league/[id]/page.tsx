@@ -19,7 +19,10 @@ export default function LeagueDetailPage({ params }: { params: { id: string } })
   const [league, setLeague] = useState<League | null>(null);
   const [loading, setLoading] = useState(true);
   const { addToast } = useToast();
-  const sp = useSearchParams();
+
+  // Strict-safe access to query string
+  const search = useSearchParams();
+  const isWelcome = search?.get("welcome") === "1";
 
   useEffect(() => {
     (async () => {
@@ -40,16 +43,16 @@ export default function LeagueDetailPage({ params }: { params: { id: string } })
 
   // Optional welcome toast if coming from Join flow
   useEffect(() => {
-    if (sp.get("welcome") === "1") {
+    if (isWelcome) {
       addToast("Welcome! Set your team name for this league below.", "success");
     }
-  }, [sp, addToast]);
+  }, [isWelcome, addToast]);
 
   if (loading) {
     return (
       <div className="card max-w-2xl">
         <div className="h1">League</div>
-        <p className="opacity-70 mt-2">Loading…</p>
+        <p className="mt-2 opacity-70">Loading…</p>
       </div>
     );
   }
@@ -58,7 +61,7 @@ export default function LeagueDetailPage({ params }: { params: { id: string } })
     return (
       <div className="card max-w-2xl">
         <div className="h1">League</div>
-        <p className="text-red-400 mt-2">League not found.</p>
+        <p className="mt-2 text-red-400">League not found.</p>
       </div>
     );
   }
@@ -67,13 +70,15 @@ export default function LeagueDetailPage({ params }: { params: { id: string } })
     <div className="space-y-6">
       <div className="card">
         <div className="h1">{league.name}</div>
-        <div className="opacity-70">{league.ruleset} — {league.season}</div>
+        <div className="opacity-70">
+          {league.ruleset} — {league.season}
+        </div>
       </div>
 
       {/* Per-league Team Name editor */}
       <LeagueTeamNameForm leagueId={league.id} />
 
-      {/* You can add more league content below (standings, entries, etc.) */}
+      {/* Add more league content below (standings, entries, etc.) */}
     </div>
   );
 }
