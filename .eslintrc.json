@@ -1,19 +1,39 @@
 ﻿{
   "root": true,
-  "env": { "browser": true, "es2022": true, "node": true },
+  "env": {
+    "browser": true,
+    "es2022": true,
+    "node": true
+  },
+
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
-    "project": "./tsconfig.eslint.json",
-    "tsconfigRootDir": "__dirname",
-    "sourceType": "module",
-    "ecmaVersion": "latest"
+    "project": ["./tsconfig.eslint.json"],
+    "tsconfigRootDir": ".",
+    "ecmaVersion": 2022,
+    "sourceType": "module"
   },
-  "plugins": ["@typescript-eslint", "react-refresh"],
+
+  "plugins": [
+    "@typescript-eslint",
+    "react-refresh"
+  ],
+
   "extends": [
     "next/core-web-vitals",
     "plugin:@typescript-eslint/recommended",
     "prettier"
   ],
+
+  "settings": {
+    "next": { "rootDir": ["./"] },
+    "import/resolver": {
+      "typescript": {
+        "project": "./tsconfig.eslint.json"
+      }
+    }
+  },
+
   "rules": {
     "react-refresh/only-export-components": "off",
 
@@ -34,11 +54,31 @@
 
     "react-hooks/exhaustive-deps": "warn"
   },
+
   "overrides": [
     {
-      "files": ["**/*.js", "**/*.jsx"],
-      "rules": { "@typescript-eslint/no-var-requires": "off" }
+      "files": ["**/*.{js,jsx}"],
+      "rules": {
+        "@typescript-eslint/no-var-requires": "off"
+      }
+    },
+    {
+      "files": ["**/tests/**/*", "**/*.test.{ts,tsx}"],
+      "env": { "jest": true }
     }
   ],
-  "ignorePatterns": [".next/", "node_modules/", "public/", "coverage/", "dist/"]
+
+  "ignorePatterns": [
+    ".next/",
+    "node_modules/",
+    "public/",
+    "coverage/",
+    "dist/",
+    "build/",
+    "playwright-report/",
+    ".turbo/",
+    "**/*.config.js",
+    "**/*.config.cjs",
+    "**/*.config.mjs"
+  ]
 }

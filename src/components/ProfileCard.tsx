@@ -1,21 +1,17 @@
 "use client";
 
 import React, { useState } from "react";
-import { supabaseClient } from "@/lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 type Profile = {
   team_name?: string | null;
   email?: string | null;
 };
 
-type Props = {
-  profile?: Profile;
-  loading?: boolean;
-  onSaved?: () => void;
-};
+type Props = { profile?: Profile; onSaved?: () => void };
 
-export default function ProfileCard({ profile, loading, onSaved }: Props) {
-  const sb = supabaseClient;
+export default function ProfileCard({ profile, onSaved }: Props) {
+  const sb = supabase;
 
   const [team, setTeam] = useState<string>(profile?.team_name ?? "");
   const [saving, setSaving] = useState(false);

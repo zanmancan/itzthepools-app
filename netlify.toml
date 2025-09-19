@@ -1,17 +1,24 @@
+# netlify.toml
 [build]
   command = "npm run build"
   publish = ".next"
 
 [build.environment]
   NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # Keep client-safe env (e.g., NEXT_PUBLIC_SUPABASE_*) in Netlify UI, not here.
 
+# Production deploys from the main branch
 [context.production.environment]
   NEXT_PUBLIC_SITE_URL = "https://itzthepools.com"
-  # Supabase PROD keys set in Netlify UI, not in code.
 
+# Deploy previews (PRs)
 [context.deploy-preview.environment]
   NEXT_PUBLIC_SITE_URL = "$DEPLOY_URL"
-  # Supabase DEV keys set in Netlify UI.
 
+# Branch deploys (non-main branches pushed directly)
 [context.branch-deploy.environment]
   NEXT_PUBLIC_SITE_URL = "$DEPLOY_URL"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

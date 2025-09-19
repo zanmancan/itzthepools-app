@@ -8,7 +8,22 @@
     "next-env.d.ts",
     "next.config.*",
     ".eslintrc.*",
-    "src/**/*.{ts,tsx,js,jsx}"
+
+    // Root-level TS/JS
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.js",
+    "**/*.jsx",
+
+    // Next types generated during build
+    ".next/types/**/*.ts"
   ],
-  "exclude": ["node_modules", ".next", "dist"]
+  "exclude": [
+    "node_modules",
+    ".next",
+    "dist",
+    "build",
+    "coverage",
+    "playwright-report"
+  ]
 }

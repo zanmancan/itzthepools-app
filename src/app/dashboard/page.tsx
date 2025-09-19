@@ -1,3 +1,4 @@
+// src/app/dashboard/page.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -53,11 +54,10 @@ function Inner() {
   }
 
   useEffect(() => {
-    // Mark fired async work as intentionally not awaited
     void load();
   }, []);
 
-  // Debounced league-name check
+  // Debounced league-name check (avoid async directly in setTimeout)
   useEffect(() => {
     if (nameCheckTimer.current) window.clearTimeout(nameCheckTimer.current);
     const name = leagueName.trim();
@@ -66,24 +66,28 @@ function Inner() {
       return;
     }
     setCheckingName(true);
-    nameCheckTimer.current = window.setTimeout(async () => {
-      try {
-        const scope = "global"; // or "perRuleset"
-        const qs =
-          scope === "global"
-            ? `?name=${encodeURIComponent(name)}&scope=global`
-            : `?name=${encodeURIComponent(name)}&scope=perRuleset&ruleset=${encodeURIComponent(
-                ruleset
-              )}&season=${encodeURIComponent(season)}`;
-        const res = await fetch(`/api/league-name${qs}`);
-        const json = await res.json();
-        setNameAvailable(!!json.available);
-      } catch {
-        setNameAvailable(null);
-      } finally {
-        setCheckingName(false);
-      }
+
+    nameCheckTimer.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const scope = "global"; // or "perRuleset"
+          const qs =
+            scope === "global"
+              ? `?name=${encodeURIComponent(name)}&scope=global`
+              : `?name=${encodeURIComponent(name)}&scope=perRuleset&ruleset=${encodeURIComponent(
+                  ruleset
+                )}&season=${encodeURIComponent(season)}`;
+          const res = await fetch(`/api/league-name${qs}`);
+          const json = await res.json();
+          setNameAvailable(!!json.available);
+        } catch {
+          setNameAvailable(null);
+        } finally {
+          setCheckingName(false);
+        }
+      })();
     }, 450) as unknown as number;
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueName, ruleset, season]);
 
@@ -155,7 +159,12 @@ function Inner() {
 
   return (
     <div className="space-y-6">
-      <PendingInviteBanner onAccepted={() => router.refresh()} />
+      <PendingInviteBanner
+        onAccepted={() => {
+          router.refresh();
+        }}
+      />
+
       <ProfileCard />
 
       {/* My Leagues */}
@@ -224,7 +233,7 @@ function Inner() {
             </select>
           </label>
 
-          <label className="block">
+        <label className="block">
             <div className="mb-1 opacity-70">Season</div>
             <input
               className="input"
@@ -304,7 +313,6 @@ function Inner() {
           </label>
         </div>
 
-        {/* Wrap async handler to satisfy no-misused-promises */}
         <button
           className="btn mt-4"
           onClick={() => {

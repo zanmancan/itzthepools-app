@@ -1,85 +1,74 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useState } from "react";
 import { supabaseClient } from "@/lib/supabaseClient";
 
 type Props = {
-  onReady?: (teamName: string) => void;
+  initial?: string;
+  onSaved?: () => void;
+  className?: string;
 };
 
-export default function TeamNameForm({ onReady }: Props) {
+export default function TeamNameForm({ initial = "", onSaved, className }: Props) {
   const sb = supabaseClient;
-
-  const [team, setTeam] = useState("");
+  const [name, setName] = useState(initial);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      const {
-        data: { user },
-      } = await sb.auth.getUser();
-      if (!user) return;
-
-      const { data } = await sb
-        .from("profiles")
-        .select("team_name")
-        .eq("id", user.id)
-        .single();
-
-      if (data?.team_name) onReady?.(data.team_name);
-    })();
-  }, [sb, onReady]);
+  const canSave = name.trim().length > 0 && !saving;
 
   async function save() {
-    setError("");
+    setError(null);
+    setSaving(true);
     try {
-      setSaving(true);
-
       const {
         data: { user },
+        error: userErr,
       } = await sb.auth.getUser();
-      if (!user) throw new Error("Not signed in.");
+      if (userErr) throw userErr;
+      if (!user) throw new Error("Not signed in");
 
-      const { error } = await sb
+      const { error: upErr } = await sb
         .from("profiles")
-        .update({ team_name: team })
+        .update({ team_name: name.trim() })
         .eq("id", user.id);
 
-      if (error) {
-        if (String(error.message).toLowerCase().includes("duplicate")) {
-          throw new Error("Team name is taken. Please choose another.");
-        }
-        throw error;
-      }
+      if (upErr) throw upErr;
 
-      onReady?.(team);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      onSaved?.();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to save team name";
+      setError(msg);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="card mt-6">
-      <div className="h1 mb-3">Choose your Team Name</div>
-      <input
-        className="input mb-3"
-        value={team}
-        onChange={(e) => setTeam(e.target.value)}
-        placeholder="e.g., Zandy’s Legends"
-      />
-      <button
-        className="btn"
-        onClick={() => {
-          void save();
-        }}
-        disabled={saving || !team.trim()}
-      >
-        {saving ? "Saving…" : "Save"}
-      </button>
-      {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-    </div>
+    <form
+      className={className}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save(); // <-- satisfies no-misused-promises
+      }}
+    >
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Your team name"
+          className="min-w-0 flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={!canSave}
+          className="rounded-md bg-cyan-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+    </form>
   );
 }

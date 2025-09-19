@@ -1,13 +1,12 @@
 {
+  // Self-contained Next 14 + strict config (no "extends")
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "DOM",
-      "ES2022"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "preserve",
+
     "allowJs": false,
     "strict": true,
     "noEmit": true,
@@ -16,29 +15,21 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
-    // *** Path aliases ***
+    "incremental": true,
+
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // ---- Path aliases (root + src mirrors) ----
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "src/*"
-      ],
-      "@/lib/*": [
-        "src/lib/*"
-      ]
+      "@/*": ["./*", "src/*"],
+      "@/lib/*": ["lib/*", "src/lib/*"],
+      "@/types/*": ["types/*", "src/types/*"]
     },
-    // Types for Next.js
-    "types": [
-      "node",
-      "react",
-      "react-dom",
-      "next"
-    ],
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ]
+
+    "types": ["node", "react", "react-dom", "next"],
+    "plugins": [{ "name": "next" }]
   },
   "include": [
     "next-env.d.ts",
@@ -46,7 +37,5 @@
     "**/*.tsx",
     ".next/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules"
-  ]
+  "exclude": ["node_modules"]
 }

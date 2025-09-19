@@ -1,64 +1,59 @@
-// src/components/Recover.tsx
 "use client";
 
 import { useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { supabaseClient } from "@/lib/supabaseClient";
 
 export default function Recover() {
+  const sb = supabaseClient;
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function sendReset() {
     setMsg(null);
+    setErr(null);
     setSending(true);
-
-    const redirectTo =
-      typeof window !== "undefined"
-        ? `${window.location.origin}/auth/complete`
-        : undefined;
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo,
-    });
-
-    setSending(false);
-
-    if (error) {
-      console.error(error);
-      setMsg("Sorry—couldn’t send the reset email. Please try again.");
-      return;
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/complete`,
+      });
+      if (error) throw error;
+      setMsg("Check your inbox for the reset link.");
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : "Failed to send reset email";
+      setErr(m);
+    } finally {
+      setSending(false);
     }
-    setMsg("Check your email for a password reset link.");
   }
 
   return (
-    <section className="mx-auto max-w-md rounded-2xl border border-neutral-800 bg-neutral-900 p-6">
-      <h1 className="mb-4 text-xl font-semibold">Reset your password</h1>
-      <form onSubmit={onSubmit} className="space-y-4">
-        <div>
-          <label className="mb-1 block text-sm text-neutral-300">Email</label>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.currentTarget.value)}
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2"
-            placeholder="you@example.com"
-          />
-        </div>
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void sendReset(); // <-- satisfies no-misused-promises
+      }}
+      className="space-y-3"
+    >
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+        placeholder="you@example.com"
+        className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+      />
+      <button
+        type="submit"
+        disabled={sending || !email}
+        className="rounded-md bg-cyan-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+      >
+        {sending ? "Sending…" : "Send reset link"}
+      </button>
 
-        <button
-          type="submit"
-          disabled={sending}
-          className="rounded-lg border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800 disabled:opacity-60"
-        >
-          {sending ? "Sending…" : "Send reset link"}
-        </button>
-
-        {msg && <p className="text-sm text-neutral-300">{msg}</p>}
-      </form>
-    </section>
+      {msg && <p className="text-sm text-green-400">{msg}</p>}
+      {err && <p className="text-sm text-red-400">{err}</p>}
+    </form>
   );
 }

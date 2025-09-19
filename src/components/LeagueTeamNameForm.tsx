@@ -13,7 +13,6 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
   const { addToast } = useToast();
 
   const [uid, setUid] = useState<string | null>(null);
-
   const [currentName, setCurrentName] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
@@ -69,19 +68,22 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
     if (!uid || invalid || trimmed.length === 0 || matchesCurrent) return;
 
     setChecking(true);
-    debounceRef.current = window.setTimeout(async () => {
-      try {
-        const { data, error } = await supabase.rpc("is_team_name_available", {
-          p_league_id: leagueId,
-          p_name: trimmed,
-          p_user: uid, // exclude my own membership
-        });
-        setAvailable(error ? null : Boolean(data));
-      } catch {
-        setAvailable(null);
-      } finally {
-        setChecking(false);
-      }
+    debounceRef.current = window.setTimeout(() => {
+      // Wrap async body so the callback itself returns void
+      void (async () => {
+        try {
+          const { data, error } = await supabase.rpc("is_team_name_available", {
+            p_league_id: leagueId,
+            p_name: trimmed,
+            p_user: uid, // exclude my own membership
+          });
+          setAvailable(error ? null : Boolean(data));
+        } catch {
+          setAvailable(null);
+        } finally {
+          setChecking(false);
+        }
+      })();
     }, 450) as unknown as number;
 
     return () => {
@@ -121,7 +123,10 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
       addToast("Team name saved!", "success");
       onUpdated?.();
     } catch (e: unknown) {
-      addToast(e instanceof Error ? e.message : "Failed to save team name", "error");
+      addToast(
+        e instanceof Error ? e.message : "Failed to save team name",
+        "error"
+      );
     } finally {
       setSaving(false);
     }
@@ -137,7 +142,6 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
       );
     }
 
-    // If the input equals the saved name, only show the “current name” line.
     if (matchesCurrent && currentName) {
       return (
         <span className="text-emerald-400">
@@ -146,14 +150,16 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
       );
     }
 
-    // Otherwise show availability state
     if (checking) return <span className="opacity-70">Checking…</span>;
     if (available === false)
-      return <span className="text-red-400">That name is already taken in this league.</span>;
+      return (
+        <span className="text-red-400">
+          That name is already taken in this league.
+        </span>
+      );
     if (available === true)
       return <span className="text-emerald-400">Available in this league.</span>;
 
-    // Neutral hint while typing
     return <span className="opacity-70">You can change this anytime.</span>;
   }, [invalid, checking, available, matchesCurrent, currentName]);
 

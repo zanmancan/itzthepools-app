@@ -41,7 +41,6 @@ export default function JoinPage({ params }: { params: { token: string } }) {
 
   // auth state
   useEffect(() => {
-    // mark async IIFE as intentionally not awaited
     void (async () => {
       const {
         data: { user },
@@ -78,7 +77,10 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     })();
   }, [token]);
 
-  const cleanName = useMemo(() => teamName.trim().replace(/\s+/g, " "), [teamName]);
+  const cleanName = useMemo(
+    () => teamName.trim().replace(/\s+/g, " "),
+    [teamName]
+  );
 
   // live team-name availability (when authed & we know league)
   useEffect(() => {
@@ -93,19 +95,22 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     setCheckSeq(my);
     setChecking(true);
 
-    const t = setTimeout(async () => {
-      try {
-        const { data, error } = await supabase.rpc("is_team_name_available", {
-          p_league_id: league.id,
-          p_name: cleanName,
-        });
-        // stale check guard
-        if (my !== checkSeq + 1) return;
-        if (error) setAvailable(null);
-        else setAvailable(!!data);
-      } finally {
-        setChecking(false);
-      }
+    const t = setTimeout(() => {
+      // schedule a sync callback, run async work inside
+      void (async () => {
+        try {
+          const { data, error } = await supabase.rpc("is_team_name_available", {
+            p_league_id: league.id,
+            p_name: cleanName,
+          });
+          // stale check guard
+          if (my !== checkSeq + 1) return;
+          if (error) setAvailable(null);
+          else setAvailable(!!data);
+        } finally {
+          setChecking(false);
+        }
+      })();
     }, 350);
 
     return () => clearTimeout(t);
@@ -115,7 +120,9 @@ export default function JoinPage({ params }: { params: { token: string } }) {
   async function sendMagicLink() {
     setSendErr(null);
     const nextPath = `/join/${token}`; // come back here after clicking email
-    const redirectTo = `${location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`;
+    const redirectTo = `${location.origin}/auth/callback?next=${encodeURIComponent(
+      nextPath
+    )}`;
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: redirectTo },
@@ -191,8 +198,8 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       <div className="card max-w-lg">
         <div className="h1 mb-2">Join “{league.name}”</div>
         <p className="opacity-80 text-sm">
-          Enter your email to sign in or create a new account. We’ll return you here to accept the
-          invite.
+          Enter your email to sign in or create a new account. We’ll return you
+          here to accept the invite.
         </p>
 
         {sent ? (
