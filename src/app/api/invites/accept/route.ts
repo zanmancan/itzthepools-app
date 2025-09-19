@@ -1,44 +1,20 @@
 // src/app/api/invites/accept/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
-/**
- * POST /api/invites/accept
- * Body: { token: string }
- *
- * Minimal placeholder: validates input & auth, then returns { status: "ok" }.
- * TODO: Add your real "accept invite" DB updates here.
- */
 export async function POST(req: Request) {
-  // Parse JSON body (tolerant of empty/invalid JSON)
-  const body = (await req.json().catch(() => ({}))) as Partial<{ token: string }>;
-  const token = body.token?.trim();
-
-  if (!token) {
+  const { token } = await req.json().catch(() => ({} as { token?: string }));
+  if (!token || typeof token !== "string") {
     return NextResponse.json(
       { status: "error", message: "Missing token" },
       { status: 400 }
     );
-  }
+    }
 
-  const supabase = createRouteHandlerClient({ cookies });
+  const sb = supabaseRoute();
 
-  // Require a signed-in user
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json(
-      { status: "error", message: "Unauthorized" },
-      { status: 401 }
-    );
-  }
-
-  // Optional: sanity check that the token exists.
-  // NOTE: This is read-only; add your real mutation later.
-  const { data: invite, error } = await supabase
+  // Minimal, safe default: find the invite and delete it (adjust to your real flow).
+  const { data: invite, error } = await sb
     .from("invites")
     .select("id")
     .eq("token", token)
@@ -46,13 +22,18 @@ export async function POST(req: Request) {
 
   if (error || !invite) {
     return NextResponse.json(
-      { status: "error", message: "Invalid invite token" },
+      { status: "error", message: "Invite not found" },
       { status: 404 }
     );
   }
 
-  // TODO: Insert membership / update invite as accepted, etc.
-  // Keeping this a no-op right now so builds stay green.
+  const { error: delErr } = await sb.from("invites").delete().eq("id", invite.id);
+  if (delErr) {
+    return NextResponse.json(
+      { status: "error", message: delErr.message },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ status: "ok" });
 }

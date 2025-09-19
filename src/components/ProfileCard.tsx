@@ -15,7 +15,7 @@ type Props = {
 };
 
 export default function ProfileCard({ profile, loading, onSaved }: Props) {
-  const sb = supabaseClient();
+  const sb = supabaseClient;
 
   const [team, setTeam] = useState<string>(profile?.team_name ?? "");
   const [saving, setSaving] = useState(false);

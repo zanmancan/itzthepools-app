@@ -1,16 +1,12 @@
 ﻿{
   "root": true,
-  "env": {
-    "browser": true,
-    "es2022": true,
-    "node": true
-  },
+  "env": { "browser": true, "es2022": true, "node": true },
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
-    "ecmaVersion": 2023,
+    "project": "./tsconfig.eslint.json",
+    "tsconfigRootDir": "__dirname",
     "sourceType": "module",
-    "project": ["./tsconfig.eslint.json"],
-    "tsconfigRootDir": "."
+    "ecmaVersion": "latest"
   },
   "plugins": ["@typescript-eslint", "react-refresh"],
   "extends": [
@@ -41,16 +37,8 @@
   "overrides": [
     {
       "files": ["**/*.js", "**/*.jsx"],
-      "rules": {
-        "@typescript-eslint/no-var-requires": "off"
-      }
+      "rules": { "@typescript-eslint/no-var-requires": "off" }
     }
   ],
-  "ignorePatterns": [
-    ".next/",
-    "node_modules/",
-    "public/",
-    "coverage/",
-    "dist/"
-  ]
+  "ignorePatterns": [".next/", "node_modules/", "public/", "coverage/", "dist/"]
 }

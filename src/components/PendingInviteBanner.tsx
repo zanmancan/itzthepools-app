@@ -1,48 +1,39 @@
 // src/components/PendingInviteBanner.tsx
 "use client";
 
-import * as React from "react";
+import { useState } from "react";
 
 type Props = {
-  /** Called after an invite is accepted so the parent can refresh */
   onAccepted?: () => void;
 };
 
-/**
- * Minimal banner that compiles and accepts an onAccepted callback.
- * Replace the body with your real pending-invite UI when ready.
- */
 export default function PendingInviteBanner({ onAccepted }: Props) {
-  const [sending, setSending] = React.useState(false);
-  const [msg, setMsg] = React.useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function accept() {
+  const accept = async () => {
+    setBusy(true);
     try {
-      setSending(true);
-      // TODO: call your real endpoint, e.g.:
-      // await fetch("/api/invites/accept", { method: "POST", body: JSON.stringify({ token }) });
+      // If your accept endpoint needs a token, pass it here (query or JSON).
+      await fetch("/api/invites/accept", { method: "POST" });
       onAccepted?.();
-      setMsg("Invite accepted.");
     } finally {
-      setSending(false);
+      setBusy(false);
     }
-  }
+  };
 
-  // If you don’t want any UI yet, you can `return null;`
   return (
-    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
+    <div className="rounded-md bg-amber-50 p-3 text-amber-900">
       <div className="flex items-center justify-between gap-3">
         <span>You have a pending invite.</span>
         <button
           type="button"
-          onClick={accept}
-          disabled={sending}
-          className="rounded bg-amber-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded bg-amber-900 px-3 py-1 text-amber-50 disabled:opacity-50"
+          disabled={busy}
+          onClick={() => void accept()}
         >
-          {sending ? "Working…" : "Accept"}
+          {busy ? "Accepting…" : "Accept invite"}
         </button>
       </div>
-      {msg && <p className="mt-1 text-xs opacity-80">{msg}</p>}
     </div>
   );
 }

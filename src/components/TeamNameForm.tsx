@@ -8,7 +8,7 @@ type Props = {
 };
 
 export default function TeamNameForm({ onReady }: Props) {
-  const sb = supabaseClient();
+  const sb = supabaseClient;
 
   const [team, setTeam] = useState("");
   const [saving, setSaving] = useState(false);
