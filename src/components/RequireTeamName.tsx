@@ -2,30 +2,27 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
-import { supabaseClient } from "@/lib/supabaseClient"; // <- singleton instance
+import { supabaseClient } from "@/lib/supabaseClient";
 
 type RequireTeamNameProps = {
   children: ReactNode;
-  /** Tooltip text shown when user doesn't have a team name yet */
   tooltip?: string;
 };
 
 export default function RequireTeamName({ children, tooltip }: RequireTeamNameProps) {
-  // Supabase singleton instance (do NOT call it as a function)
+  // Supabase client is a stable singleton instance
   const sb = supabaseClient;
 
-  // null = we haven't checked yet; true/false once we know
   const [hasName, setHasName] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      // 1) Get current user (if not signed in, they obviously don't have a team name here)
+    // Prefix with `void` so eslint knows we intentionally fire-and-forget this IIFE.
+    void (async () => {
       const { data: userData, error: userErr } = await sb.auth.getUser();
-
       if (userErr) {
-        console.error("RequireTeamName: getUser error", userErr);
+        console.error("RequireTeamName:getUser", userErr);
         if (!cancelled) setHasName(false);
         return;
       }
@@ -36,7 +33,6 @@ export default function RequireTeamName({ children, tooltip }: RequireTeamNamePr
         return;
       }
 
-      // 2) Look up their team_name from profiles
       const { data, error } = await sb
         .from("profiles")
         .select("team_name")
@@ -44,7 +40,7 @@ export default function RequireTeamName({ children, tooltip }: RequireTeamNamePr
         .single();
 
       if (error) {
-        console.error("RequireTeamName: profiles query error", error);
+        console.error("RequireTeamName:profiles", error);
         if (!cancelled) setHasName(false);
         return;
       }
@@ -55,10 +51,9 @@ export default function RequireTeamName({ children, tooltip }: RequireTeamNamePr
     return () => {
       cancelled = true;
     };
-    // sb is a stable module singleton; no need to include it in deps
-  }, []);
+    // include sb to satisfy exhaustive-deps; it's a stable singleton so no re-renders.
+  }, [sb]);
 
-  // Still loading
   if (hasName === null) {
     return (
       <div className="inline-flex items-center rounded-md bg-neutral-800 px-3 py-2 text-neutral-300">
@@ -67,12 +62,9 @@ export default function RequireTeamName({ children, tooltip }: RequireTeamNamePr
     );
   }
 
-  // OK to render children if user has a name
   if (hasName) return <>{children}</>;
 
-  // Otherwise, render children but visually/interaction disabled with a hint
   const hint = tooltip ?? "Set a Team Name first";
-
   return (
     <div
       className="group relative inline-flex cursor-not-allowed items-center opacity-60"
