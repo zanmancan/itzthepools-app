@@ -1,18 +1,24 @@
 // src/lib/supabaseClient.ts
-// Lightweight browser/client Supabase instance.
-// Use this ONLY in client components/hooks. For server routes, prefer auth-helpers.
+// Browser/client-side Supabase singleton for App Router client components.
+// NOTE: We export it under multiple names to satisfy older imports in the repo.
 
 import { createClient } from "@supabase/supabase-js";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Create a singleton client (module scope). Safe in Next.js app router client code.
-export const supabaseClient = createClient(url, anon, {
+const supabaseClient = createClient(url, anon, {
   auth: {
-    // Persist session in browser (default). Tweak later if you want cookies-only auth.
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
   },
 });
+
+// --- Exports ---
+// Named export used in new code:
+export { supabaseClient };
+// Back-compat for code that does: `import { supabase } from "@/lib/supabaseClient"`
+export { supabaseClient as supabase };
+// Default export for code that does: `import supabase from "@/lib/supabaseClient"`
+export default supabaseClient;
