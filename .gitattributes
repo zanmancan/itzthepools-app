@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep Husky hooks POSIX-friendly on Windows
+.husky/* text eol=lf
+*.sh text eol=lf
