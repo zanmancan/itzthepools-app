@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark theme baseline */
+:root { color-scheme: dark; }
+html, body { height: 100%; }
+body { @apply bg-neutral-950 text-neutral-100; }
+
+.container { @apply max-w-4xl mx-auto px-4 sm:px-6 py-6; }
+.card { @apply rounded-2xl border border-neutral-800 p-5 shadow; }
+.btn { @apply inline-flex items-center gap-2 rounded-xl border border-neutral-700 px-4 py-2; }
+.input { @apply w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2; }
+.h1 { @apply text-2xl font-semibold; }

@@ -1,7 +1,29 @@
-# dependencies / build
-node_modules
-dist
+# dependencies
+/node_modules
 
-# env files (never commit)
+# next.js
+/.next
+/out
+
+# env
 .env
-.env.*
+.env*.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# os/editor junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# hosts
+.vercel
+.netlify
+
+# coverage/temp
+coverage
+tmp
