@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 
 /**
  * Reached via the verification (OTP) email link.

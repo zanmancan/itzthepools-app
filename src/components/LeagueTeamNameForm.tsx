@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "./Toast";
 
 type Props = {

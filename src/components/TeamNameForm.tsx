@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase-client"; // <-- use your existing client
+import { supabase } from "@/lib/supabaseClient"; // <-- use your existing client
 
 /**
  * UI for setting/changing a user's Team Name.

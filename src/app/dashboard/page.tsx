@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 import AuthGate from "@/components/AuthGate";
 import { useToast } from "@/components/Toast";
 import ProfileCard from "@/components/ProfileCard";

@@ -3,7 +3,7 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const router = useRouter();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/components/Toast";
 import { savePendingInvite, clearPendingInvite } from "@/lib/pendingInvite";
 

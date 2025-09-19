@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useToast } from "./Toast";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 
 type Invite = {
   id: string;

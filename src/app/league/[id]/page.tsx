@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase-client";
+import { supabase } from "@/lib/supabaseClient";
 import LeagueTeamNameForm from "@/components/LeagueTeamNameForm";
 import { useToast } from "@/components/Toast";
 
