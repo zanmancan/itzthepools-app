@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "🔎 lint-staged…"
+npx --no -- lint-staged
+rc=$?
+if [ $rc -ne 0 ]; then
+  echo "❌ lint-staged failed"
+  exit $rc
+fi
+
+echo "🔡 typecheck…"
+npm run -s typecheck
+rc=$?
+if [ $rc -ne 0 ]; then
+  echo "❌ typecheck failed"
+  exit $rc
+fi
+
+echo "✅ pre-commit checks passed"
