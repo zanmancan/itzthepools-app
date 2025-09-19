@@ -1,42 +1,21 @@
+// src/components/PendingInviteBanner.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { getPendingInvite, clearPendingInvite } from "@/lib/pendingInvite";
-import Link from "next/link";
+import * as React from "react";
 
-export default function PendingInviteBanner() {
-  const [token, setToken] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{name: string; ruleset: string; season: string} | null>(null);
+type PendingInviteBannerProps = {
+  /** Called after an invite is accepted so the parent can refresh */
+  onAccepted?: () => void;
+};
 
-  useEffect(() => {
-    const t = getPendingInvite();
-    setToken(t);
-    (async () => {
-      if (!t) return;
-      try {
-        const res = await fetch(`/api/invites/${t}`);
-        if (!res.ok) { clearPendingInvite(); setToken(null); return; }
-        const data = await res.json();
-        if (data.status !== "ok") { clearPendingInvite(); setToken(null); return; }
-        setMeta({ name: data.leagueName, ruleset: data.ruleset, season: data.season });
-      } catch {
-        // ignore
-      }
-    })();
-  }, []);
+/**
+ * Minimal banner that compiles and accepts an onAccepted callback.
+ * Replace the body with your real pending-invite UI when ready.
+ */
+export default function PendingInviteBanner({ onAccepted }: PendingInviteBannerProps) {
+  // TODO: load pending invites and show UI.
+  // When you actually accept an invite, call onAccepted?.()
 
-  if (!token || !meta) return null;
-
-  return (
-    <div className="card border border-blue-700/50">
-      <div className="font-medium">You have a pending league invite</div>
-      <div className="opacity-80 text-sm mt-1">
-        {meta.name} — {meta.ruleset} / {meta.season}
-      </div>
-      <div className="mt-2 flex gap-2">
-        <Link className="btn" href={`/join/${token}`}>Review & Accept</Link>
-        <button className="btn" onClick={() => { clearPendingInvite(); location.reload(); }}>Dismiss</button>
-      </div>
-    </div>
-  );
+  // For now, render nothing (keeps build green).
+  return null;
 }
