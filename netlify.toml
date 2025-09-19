@@ -14,3 +14,13 @@
   from = "/api/join-league"
   to = "/.netlify/functions/join-league"
   status = 200
+
+[[redirects]]
+  from = "/api/my-leagues"
+  to = "/.netlify/functions/my-leagues"
+  status = 200
+
+[[redirects]]
+  from = "/api/my-invites"
+  to = "/.netlify/functions/my-invites"
+  status = 200
