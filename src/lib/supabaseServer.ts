@@ -4,14 +4,13 @@ import {
   createServerComponentClient,
   createRouteHandlerClient,
 } from "@supabase/auth-helpers-nextjs";
-import type { SupabaseClient } from "@supabase/supabase-js";
 
 /** For Server Components (layout/page server code) */
-export function supabaseServer(): SupabaseClient {
+export function supabaseServer() {
   return createServerComponentClient({ cookies });
 }
 
 /** For Route Handlers (/api/*) */
-export function supabaseRoute(): SupabaseClient {
+export function supabaseRoute() {
   return createRouteHandlerClient({ cookies });
 }
