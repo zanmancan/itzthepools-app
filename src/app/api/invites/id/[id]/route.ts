@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 // DELETE /api/invites/id/:id -> owner_revoke_invite
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 // GET /api/leagues/:id/members  -> owner_list_members
 export async function GET(_: NextRequest, { params }: { params: { id: string } }) {

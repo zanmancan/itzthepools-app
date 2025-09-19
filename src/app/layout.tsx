@@ -1,6 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { supabaseServer } from "@/lib/supabase-server";
+import { supabaseServer } from "@/lib/supabaseServer";
 import Nav from "@/components/Nav";
 import ToastProvider from "@/components/Toast";
 

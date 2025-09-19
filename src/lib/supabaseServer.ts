@@ -1,4 +1,4 @@
-// src/lib/supabase-server.ts
+// src/lib/supabaseServer.ts
 import { cookies } from "next/headers";
 import {
   createServerComponentClient,
@@ -6,12 +6,12 @@ import {
 } from "@supabase/auth-helpers-nextjs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Use inside Server Components (e.g., layout/page server code) */
+/** For Server Components (layout/page server code) */
 export function supabaseServer(): SupabaseClient {
   return createServerComponentClient({ cookies });
 }
 
-/** Use inside Route Handlers (e.g., /api/*) */
+/** For Route Handlers (/api/*) */
 export function supabaseRoute(): SupabaseClient {
   return createRouteHandlerClient({ cookies });
 }

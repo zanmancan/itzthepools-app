@@ -1,7 +1,6 @@
 // src/app/api/invites/token/[token]/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 type League = {
   id: string | number;
@@ -13,7 +12,6 @@ type League = {
 type InviteRow = {
   id: string | number;
   token: string;
-  // Supabase can return a related record as an array or as a single object depending on the select.
   league: League | League[] | null;
 };
 
@@ -22,10 +20,7 @@ function normalizeLeague(league: InviteRow["league"]): League | null {
   return Array.isArray(league) ? (league[0] ?? null) : league;
 }
 
-export async function GET(
-  _req: Request,
-  ctx: { params: { token: string } }
-) {
+export async function GET(_req: Request, ctx: { params: { token: string } }) {
   const token = ctx.params?.token;
   if (!token) {
     return NextResponse.json(
@@ -34,11 +29,8 @@ export async function GET(
     );
   }
 
-  // Correct helper for Next.js App Router route handlers.
-  // Uses NEXT_PUBLIC_SUPABASE_URL / ANON_KEY under the hood and attaches auth cookies.
-  const supabase = createRouteHandlerClient({ cookies });
+  const supabase = supabaseRoute();
 
-  // Query the invite + joined league (force a single row)
   const { data, error } = await supabase
     .from("invites")
     .select(

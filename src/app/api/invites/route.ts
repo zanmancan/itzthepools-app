@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 /**
  * POST /api/invites

@@ -1,6 +1,6 @@
 // src/app/api/invites/open/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 export async function POST(req: NextRequest) {
   try {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 /**
  * GET /api/league-name?name=Zandy%20Family%20Pool&scope=global|perRuleset&ruleset=march_madness&season=2026

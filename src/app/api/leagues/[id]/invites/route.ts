@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase-server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 /** GET /api/leagues/:id/invites -> list all invites (owner-only) */
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
