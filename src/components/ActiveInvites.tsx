@@ -15,11 +15,7 @@ type Invite = {
   max_uses: number | null;
 };
 
-export default function ActiveInvites({
-  leagueId,
-}: {
-  leagueId: string;
-}) {
+export default function ActiveInvites({ leagueId }: { leagueId: string }) {
   const { addToast } = useToast();
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +35,8 @@ export default function ActiveInvites({
   }
 
   useEffect(() => {
-    load();
+    // mark as intentionally not awaited
+    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueId]);
 
@@ -84,7 +81,12 @@ export default function ActiveInvites({
                   <td className="pr-3 py-1">{uses}</td>
                   <td className="pr-3 py-1">{expires}</td>
                   <td className="py-1">
-                    <button className="btn" onClick={() => revoke(i.id)}>
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        void revoke(i.id);
+                      }}
+                    >
                       Revoke
                     </button>
                   </td>

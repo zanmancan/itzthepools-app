@@ -25,7 +25,7 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
 
   // Load session user + current team name
   useEffect(() => {
-    (async () => {
+    void (async () => {
       const { data: ures } = await supabase.auth.getUser();
       const user = ures?.user ?? null;
       setUid(user?.id ?? null);
@@ -120,8 +120,8 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
       setCurrentName(trimmed);
       addToast("Team name saved!", "success");
       onUpdated?.();
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to save team name", "error");
+    } catch (e: unknown) {
+      addToast(e instanceof Error ? e.message : "Failed to save team name", "error");
     } finally {
       setSaving(false);
     }
@@ -169,7 +169,13 @@ export default function LeagueTeamNameForm({ leagueId, onUpdated }: Props) {
           onChange={(e) => setValue(e.target.value)}
           aria-invalid={invalid}
         />
-        <button className="btn" onClick={save} disabled={saving || invalid}>
+        <button
+          className="btn"
+          onClick={() => {
+            void save();
+          }}
+          disabled={saving || invalid}
+        >
           {saving ? "Saving…" : "Save"}
         </button>
       </div>

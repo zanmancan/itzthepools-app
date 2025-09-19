@@ -14,7 +14,12 @@ export default function JoinPage({ params }: { params: { token: string } }) {
   // invite details
   const [loadingInvite, setLoadingInvite] = useState(true);
   const [inviteErr, setInviteErr] = useState<string | null>(null);
-  const [league, setLeague] = useState<{id: string; name: string; ruleset: string; season: string} | null>(null);
+  const [league, setLeague] = useState<{
+    id: string;
+    name: string;
+    ruleset: string;
+    season: string;
+  } | null>(null);
 
   // email login state
   const [email, setEmail] = useState("");
@@ -36,15 +41,18 @@ export default function JoinPage({ params }: { params: { token: string } }) {
 
   // auth state
   useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+    // mark async IIFE as intentionally not awaited
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       setAuthed(!!user);
     })();
   }, []);
 
   // load invite meta for league name, ruleset, etc.
   useEffect(() => {
-    (async () => {
+    void (async () => {
       setLoadingInvite(true);
       setInviteErr(null);
       try {
@@ -59,7 +67,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
             id: data.leagueId,
             name: data.leagueName,
             ruleset: data.ruleset,
-            season: data.season
+            season: data.season,
           });
         }
       } catch (e: any) {
@@ -70,15 +78,16 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     })();
   }, [token]);
 
-  const cleanName = useMemo(
-    () => teamName.trim().replace(/\s+/g, " "),
-    [teamName]
-  );
+  const cleanName = useMemo(() => teamName.trim().replace(/\s+/g, " "), [teamName]);
 
   // live team-name availability (when authed & we know league)
   useEffect(() => {
     if (!authed || !league) return;
-    if (!cleanName) { setAvailable(null); setChecking(false); return; }
+    if (!cleanName) {
+      setAvailable(null);
+      setChecking(false);
+      return;
+    }
 
     const my = checkSeq + 1;
     setCheckSeq(my);
@@ -88,9 +97,10 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       try {
         const { data, error } = await supabase.rpc("is_team_name_available", {
           p_league_id: league.id,
-          p_name: cleanName
+          p_name: cleanName,
         });
-        if (my !== checkSeq + 1) return; // newer run started
+        // stale check guard
+        if (my !== checkSeq + 1) return;
         if (error) setAvailable(null);
         else setAvailable(!!data);
       } finally {
@@ -108,7 +118,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     const redirectTo = `${location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`;
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: redirectTo }
+      options: { emailRedirectTo: redirectTo },
     });
     if (error) setSendErr(error.message);
     else setSent(true);
@@ -116,8 +126,14 @@ export default function JoinPage({ params }: { params: { token: string } }) {
 
   async function acceptInvite() {
     if (!league) return;
-    if (!cleanName) { setAcceptErr("Team name is required."); return; }
-    if (available === false) { setAcceptErr("That team name is taken."); return; }
+    if (!cleanName) {
+      setAcceptErr("Team name is required.");
+      return;
+    }
+    if (available === false) {
+      setAcceptErr("That team name is taken.");
+      return;
+    }
 
     setAcceptBusy(true);
     setAcceptErr(null);
@@ -125,7 +141,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       const res = await fetch("/api/invites/accept-with-name", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token, teamName: cleanName })
+        body: JSON.stringify({ token, teamName: cleanName }),
       });
       if (!res.ok) throw new Error(await res.text());
       addToast("Joined league!", "success");
@@ -175,7 +191,8 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       <div className="card max-w-lg">
         <div className="h1 mb-2">Join “{league.name}”</div>
         <p className="opacity-80 text-sm">
-          Enter your email to sign in or create a new account. We’ll return you here to accept the invite.
+          Enter your email to sign in or create a new account. We’ll return you here to accept the
+          invite.
         </p>
 
         {sent ? (
@@ -189,7 +206,14 @@ export default function JoinPage({ params }: { params: { token: string } }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            <button className="btn mt-3" onClick={sendMagicLink}>Send magic link</button>
+            <button
+              className="btn mt-3"
+              onClick={() => {
+                void sendMagicLink();
+              }}
+            >
+              Send magic link
+            </button>
             {sendErr && <p className="mt-2 text-red-400">{sendErr}</p>}
           </>
         )}
@@ -229,7 +253,13 @@ export default function JoinPage({ params }: { params: { token: string } }) {
         )}
       </div>
 
-      <button className="btn" onClick={acceptInvite} disabled={acceptBusy || !cleanName || available === false}>
+      <button
+        className="btn"
+        onClick={() => {
+          void acceptInvite();
+        }}
+        disabled={acceptBusy || !cleanName || available === false}
+      >
         {acceptBusy ? "Joining…" : "Accept Invite"}
       </button>
       {acceptErr && <p className="text-red-400 mt-2">{acceptErr}</p>}

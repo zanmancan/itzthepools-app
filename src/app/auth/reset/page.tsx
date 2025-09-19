@@ -15,9 +15,10 @@ export default function ResetPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [updating, setUpdating] = useState(false);
 
-  // 1) exchange code for session
+  // 1) Exchange code for session (if present)
   useEffect(() => {
-    (async () => {
+    // mark IIFE as intentionally not awaited
+    void (async () => {
       const code = params.get("code");
       if (!code) {
         setStage("form"); // allow update if they already have a session
@@ -50,8 +51,9 @@ export default function ResetPasswordPage() {
       setStage("done");
       addToast("Password updated!", "success");
       setTimeout(() => router.push("/dashboard"), 800);
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to update password", "error");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      addToast(message || "Failed to update password", "error");
     } finally {
       setUpdating(false);
     }
@@ -98,7 +100,14 @@ export default function ResetPasswordPage() {
           placeholder="••••••••"
         />
       </label>
-      <button className="btn" onClick={submit} disabled={updating}>
+      {/* call pattern: wrap async call and mark as fire-and-forget */}
+      <button
+        className="btn"
+        onClick={() => {
+          void submit();
+        }}
+        disabled={updating}
+      >
         {updating ? "Updating…" : "Update Password"}
       </button>
     </div>

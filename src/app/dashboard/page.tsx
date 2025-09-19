@@ -53,7 +53,8 @@ function Inner() {
   }
 
   useEffect(() => {
-    load();
+    // Mark fired async work as intentionally not awaited
+    void load();
   }, []);
 
   // Debounced league-name check
@@ -303,7 +304,13 @@ function Inner() {
           </label>
         </div>
 
-        <button className="btn mt-4" onClick={createLeague}>
+        {/* Wrap async handler to satisfy no-misused-promises */}
+        <button
+          className="btn mt-4"
+          onClick={() => {
+            void createLeague();
+          }}
+        >
           Create
         </button>
       </div>

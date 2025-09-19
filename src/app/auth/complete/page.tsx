@@ -23,38 +23,54 @@ export default function CompleteSignupPage() {
     let mounted = true;
 
     // If this page is loaded from a valid verification link, we should have a session.
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      if (data.session) {
-        setReady(true);
-      } else {
-        setErr("This verification link is invalid or has expired. Please sign up again.");
+    // Use an async IIFE and mark it as intentionally not awaited.
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (!mounted) return;
+        if (data.session) {
+          setReady(true);
+        } else {
+          setErr(
+            "This verification link is invalid or has expired. Please sign up again."
+          );
+        }
+      } catch (e) {
+        if (!mounted) return;
+        // eslint-disable-next-line no-console
+        console.error("complete: getSession failed", e);
+        setErr("Unable to validate session.");
       }
-    });
+    })();
 
-    // Also catch the real-time event arriving on mount
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+    // Also catch the real-time auth event arriving on mount
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
       if (!mounted) return;
       if (event === "SIGNED_IN") setReady(true);
     });
 
     return () => {
       mounted = false;
-      sub.subscription.unsubscribe();
+      authListener.subscription.unsubscribe();
     };
   }, []);
 
   async function setNewPassword() {
-    setBusy(true); setErr(null); setMsg(null);
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
 
       setMsg("Password set. Redirecting…");
       // After setting password, keep them signed in & send to their next page
-      setTimeout(() => (location.href = next), 700);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to set password");
+      setTimeout(() => {
+        location.href = next;
+      }, 700);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      setErr(message || "Failed to set password");
     } finally {
       setBusy(false);
     }
@@ -69,15 +85,24 @@ export default function CompleteSignupPage() {
 
       {ready && (
         <>
-          <p className="opacity-80">Your email is verified. Please set a password to continue.</p>
+          <p className="opacity-80">
+            Your email is verified. Please set a password to continue.
+          </p>
           <input
             className="input"
             type="password"
             placeholder="New password"
             value={password}
-            onChange={(e)=>setPassword(e.target.value)}
+            onChange={(e) => setPassword(e.target.value)}
           />
-          <button className="btn" disabled={busy || password.length < 8} onClick={setNewPassword}>
+          {/* call pattern: wrap async call and mark as fire-and-forget */}
+          <button
+            className="btn"
+            disabled={busy || password.length < 8}
+            onClick={() => {
+              void setNewPassword();
+            }}
+          >
             {busy ? "Saving…" : "Set password"}
           </button>
           {msg && <p className="text-emerald-400">{msg}</p>}

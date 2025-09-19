@@ -35,7 +35,7 @@ export default function ProfileCard() {
   const [sendingReset, setSendingReset] = useState(false);
   const [lastResetTs, setLastResetTs] = useState<number | null>(null);
 
-  // NEW: availability state for display name
+  // availability state for display name
   const [checking, setChecking] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
   const checkSeq = useRef(0);
@@ -49,7 +49,8 @@ export default function ProfileCard() {
 
   // Load session user + profile
   useEffect(() => {
-    (async () => {
+    // mark async IIFE as intentionally not awaited
+    void (async () => {
       setLoading(true);
       const { data: userRes, error: userErr } = await supabase.auth.getUser();
       if (userErr || !userRes.user) {
@@ -66,7 +67,7 @@ export default function ProfileCard() {
         .eq("id", user.id)
         .single();
 
-      if (error && error.code !== "PGRST116") {
+      if (error && (error as any).code !== "PGRST116") {
         addToast(`Failed to load profile: ${error.message}`, "error");
       } else {
         const dn = profile?.display_name ?? "";
@@ -139,7 +140,6 @@ export default function ProfileCard() {
       setDisplayName(cleaned); // normalize field
       addToast("Profile saved!", "success");
     } catch (e: any) {
-      // If the unique index throws, we’ll catch here
       addToast(e?.message ?? "Failed to save profile", "error");
     } finally {
       setSaving(false);
@@ -177,7 +177,7 @@ export default function ProfileCard() {
       if (upErr) throw upErr;
 
       const {
-        data: { publicUrl }
+        data: { publicUrl },
       } = supabase.storage.from("avatars").getPublicUrl(path);
 
       const { error: profErr } = await supabase
@@ -225,7 +225,7 @@ export default function ProfileCard() {
     try {
       const redirectTo = `${window.location.origin}/auth/reset`;
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo
+        redirectTo,
       });
       if (error) throw error;
       setLastResetTs(Date.now());
@@ -265,7 +265,13 @@ export default function ProfileCard() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="opacity-70">Email:</div>
         <div className="font-medium">{email}</div>
-        <button className="btn" onClick={sendResetEmail} disabled={sendingReset}>
+        <button
+          className="btn"
+          onClick={() => {
+            void sendResetEmail();
+          }}
+          disabled={sendingReset}
+        >
           {sendingReset ? "Sending…" : "Reset Password"}
         </button>
       </div>
@@ -276,7 +282,13 @@ export default function ProfileCard() {
           <button className="btn" onClick={chooseFile} disabled={uploading}>
             {uploading ? "Uploading…" : "Upload Avatar"}
           </button>
-          <button className="btn" onClick={removeAvatar} disabled={uploading || !avatarUrl}>
+          <button
+            className="btn"
+            onClick={() => {
+              void removeAvatar();
+            }}
+            disabled={uploading || !avatarUrl}
+          >
             Remove
           </button>
         </div>
@@ -287,7 +299,7 @@ export default function ProfileCard() {
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) onFileSelected(f);
+            if (f) void onFileSelected(f);
             e.currentTarget.value = ""; // allow choosing the same file again
           }}
         />
@@ -308,7 +320,8 @@ export default function ProfileCard() {
       <div className="mb-3 text-sm max-w-md">
         {!validBasic ? (
           <span className="text-red-400">
-            Must be {MIN}-{MAX} chars; letters, numbers, spaces, _ or -. Can’t start or end with a space/symbol.
+            Must be {MIN}-{MAX} chars; letters, numbers, spaces, _ or -. Can’t start or
+            end with a space/symbol.
           </span>
         ) : checking ? (
           <span className="opacity-70">Checking…</span>
@@ -323,7 +336,9 @@ export default function ProfileCard() {
 
       <button
         className="btn"
-        onClick={saveProfile}
+        onClick={() => {
+          void saveProfile();
+        }}
         disabled={saving || !validBasic || available === false}
       >
         {saving ? "Saving…" : "Save Profile"}

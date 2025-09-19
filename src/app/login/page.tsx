@@ -21,7 +21,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
 
   async function signIn() {
-    setBusy(true); setErr(null); setMsg(null);
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
@@ -37,14 +39,16 @@ export default function LoginPage() {
   // Email-only signup → sends verification (OTP) link.
   // When they click it, they will land on /auth/complete to set a password.
   async function startEmailVerification() {
-    setBusy(true); setErr(null); setMsg(null);
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
           shouldCreateUser: true,
-          emailRedirectTo: `${location.origin}/auth/complete?next=${encodeURIComponent(next)}`
-        }
+          emailRedirectTo: `${location.origin}/auth/complete?next=${encodeURIComponent(next)}`,
+        },
       });
       if (error) throw error;
       setMsg("Verification link sent. Check your email to continue.");
@@ -56,10 +60,12 @@ export default function LoginPage() {
   }
 
   async function sendReset() {
-    setBusy(true); setErr(null); setMsg(null);
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${location.origin}/auth/reset`
+        redirectTo: `${location.origin}/auth/reset`,
       });
       if (error) throw error;
       setMsg("Password reset email sent.");
@@ -75,10 +81,16 @@ export default function LoginPage() {
       <div className="h1">Account</div>
 
       <div className="flex gap-2">
-        <button className={`btn ${tab === "signin" ? "" : "opacity-60"}`} onClick={()=>setTab("signin")}>
+        <button
+          className={`btn ${tab === "signin" ? "" : "opacity-60"}`}
+          onClick={() => setTab("signin")}
+        >
           Sign in
         </button>
-        <button className={`btn ${tab === "signup" ? "" : "opacity-60"}`} onClick={()=>setTab("signup")}>
+        <button
+          className={`btn ${tab === "signup" ? "" : "opacity-60"}`}
+          onClick={() => setTab("signup")}
+        >
           Create account
         </button>
       </div>
@@ -88,7 +100,7 @@ export default function LoginPage() {
         type="email"
         placeholder="you@example.com"
         value={email}
-        onChange={(e)=>setEmail(e.target.value)}
+        onChange={(e) => setEmail(e.target.value)}
       />
 
       {tab === "signin" && (
@@ -98,13 +110,26 @@ export default function LoginPage() {
             type="password"
             placeholder="••••••••"
             value={password}
-            onChange={(e)=>setPassword(e.target.value)}
+            onChange={(e) => setPassword(e.target.value)}
           />
           <div className="flex gap-2">
-            <button className="btn" disabled={busy} onClick={signIn}>
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => {
+                void signIn();
+              }}
+            >
               {busy ? "Signing in…" : "Sign in"}
             </button>
-            <button className="btn" disabled={busy || !email} onClick={sendReset} title="Send password reset to the email above">
+            <button
+              className="btn"
+              disabled={busy || !email}
+              title="Send password reset to the email above"
+              onClick={() => {
+                void sendReset();
+              }}
+            >
               {busy ? "Sending…" : "Forgot password"}
             </button>
           </div>
@@ -113,11 +138,18 @@ export default function LoginPage() {
 
       {tab === "signup" && (
         <>
-          <button className="btn" disabled={busy || !email} onClick={startEmailVerification}>
+          <button
+            className="btn"
+            disabled={busy || !email}
+            onClick={() => {
+              void startEmailVerification();
+            }}
+          >
             {busy ? "Sending…" : "Send verification link"}
           </button>
           <p className="opacity-70 text-sm">
-            After verifying your email, you’ll be asked to set a password. Future logins require your password.
+            After verifying your email, you’ll be asked to set a password. Future logins require
+            your password.
           </p>
         </>
       )}

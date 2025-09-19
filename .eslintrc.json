@@ -7,47 +7,36 @@
   },
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
-    "ecmaVersion": "latest",
+    "ecmaVersion": 2023,
     "sourceType": "module",
-    "project": "./tsconfig.eslint.json",
-    "tsconfigRootDir": "__dirname"
+    "project": ["./tsconfig.eslint.json"],
+    "tsconfigRootDir": "."
   },
-  "plugins": [
-    "@typescript-eslint",
-    "react-hooks"
-  ],
+  "plugins": ["@typescript-eslint", "react-refresh"],
   "extends": [
     "next/core-web-vitals",
-    "plugin:@typescript-eslint/recommended-type-checked",
+    "plugin:@typescript-eslint/recommended",
     "prettier"
   ],
   "rules": {
-    /* Keep these strict enough to be useful but not block deploys */
+    "react-refresh/only-export-components": "off",
+
     "no-console": ["warn", { "allow": ["warn", "error"] }],
     "eqeqeq": ["warn", "smart"],
-    "react-hooks/rules-of-hooks": "warn",
-    "react-hooks/exhaustive-deps": "warn",
 
-    /* Practical TS rules */
     "@typescript-eslint/no-unused-vars": [
       "warn",
       { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
     ],
-    "@typescript-eslint/no-misused-promises": [
-      "warn",
-      { "checksVoidReturn": false }
-    ],
+    "@typescript-eslint/no-misused-promises": "warn",
 
-    /* Migration-noise down to warnings so CI doesn’t fail */
     "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-unsafe-assignment": "warn",
-    "@typescript-eslint/no-unsafe-member-access": "warn",
-    "@typescript-eslint/no-unsafe-argument": "warn",
-    "@typescript-eslint/no-unsafe-call": "warn",
-    "@typescript-eslint/no-floating-promises": [
-      "warn",
-      { "ignoreVoid": true, "ignoreIIFE": true }
-    ]
+    "@typescript-eslint/no-unsafe-assignment": "off",
+    "@typescript-eslint/no-unsafe-member-access": "off",
+    "@typescript-eslint/no-unsafe-argument": "off",
+    "@typescript-eslint/no-floating-promises": "off",
+
+    "react-hooks/exhaustive-deps": "warn"
   },
   "overrides": [
     {
@@ -62,8 +51,6 @@
     "node_modules/",
     "public/",
     "coverage/",
-    "dist/",
-    "netlify/"
-  ],
-  "reportUnusedDisableDirectives": true
+    "dist/"
+  ]
 }

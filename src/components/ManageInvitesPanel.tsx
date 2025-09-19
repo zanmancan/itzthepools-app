@@ -1,4 +1,5 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import { useToast } from "@/components/Toast";
 
@@ -24,19 +25,26 @@ export default function ManageInvitesPanel({ leagueId }: { leagueId: string }) {
       if (!res.ok) throw new Error(await res.text());
       const json = await res.json();
       setRows(json.invites ?? []);
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to load invites", "error");
+    } catch (e: unknown) {
+      addToast(e instanceof Error ? e.message : "Failed to load invites", "error");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [leagueId]);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leagueId]);
 
   async function copyLink(token: string) {
     const joinUrl = `${location.origin}/join/${token}`;
-    await navigator.clipboard.writeText(joinUrl);
-    addToast("Copied invite link", "success");
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      addToast("Copied invite link", "success");
+    } catch {
+      addToast("Could not copy link", "error");
+    }
   }
 
   async function revoke(id: string) {
@@ -44,9 +52,9 @@ export default function ManageInvitesPanel({ leagueId }: { leagueId: string }) {
       const res = await fetch(`/api/invites/id/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
       addToast("Invite revoked", "success");
-      load();
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to revoke invite", "error");
+      await load();
+    } catch (e: unknown) {
+      addToast(e instanceof Error ? e.message : "Failed to revoke invite", "error");
     }
   }
 
@@ -71,9 +79,12 @@ export default function ManageInvitesPanel({ leagueId }: { leagueId: string }) {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const status = r.revoked_at ? "Revoked"
-                  : r.accepted_at ? "Used"
-                  : (r.expires_at && new Date(r.expires_at) < new Date()) ? "Expired"
+                const status = r.revoked_at
+                  ? "Revoked"
+                  : r.accepted_at
+                  ? "Used"
+                  : r.expires_at && new Date(r.expires_at) < new Date()
+                  ? "Expired"
                   : "Open";
 
                 return (
@@ -84,10 +95,22 @@ export default function ManageInvitesPanel({ leagueId }: { leagueId: string }) {
                     <td>{status}</td>
                     <td className="text-right">
                       <div className="flex gap-2 justify-end">
-                        <button className="btn" onClick={() => copyLink(r.token)} disabled={!!r.revoked_at}>
+                        <button
+                          className="btn"
+                          onClick={() => {
+                            void copyLink(r.token);
+                          }}
+                          disabled={!!r.revoked_at}
+                        >
                           Copy
                         </button>
-                        <button className="btn" onClick={() => revoke(r.id)} disabled={!!r.revoked_at || !!r.accepted_at}>
+                        <button
+                          className="btn"
+                          onClick={() => {
+                            void revoke(r.id);
+                          }}
+                          disabled={!!r.revoked_at || !!r.accepted_at}
+                        >
                           Revoke
                         </button>
                       </div>

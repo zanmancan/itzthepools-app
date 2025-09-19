@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useToast } from "./Toast";
+import { useToast } from "./Toast"; // stays relative to this component folder
 import { supabase } from "@/lib/supabaseClient";
 
 type Invite = {
@@ -48,7 +48,9 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
   }
 
   useEffect(() => {
-    load();
+    // mark as intentionally not awaited to satisfy no-floating-promises
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueId]);
 
   async function createInvite() {
@@ -60,8 +62,8 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
         body: JSON.stringify({
           leagueId,
           email: email.trim() || undefined,
-          note: note.trim() || undefined
-        })
+          note: note.trim() || undefined,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const { id, joinUrl } = await res.json();
@@ -73,8 +75,8 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
       await load();
       setOpen(true);
       setShowLink((m) => ({ ...m, [id]: false }));
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to create invite", "error");
+    } catch (e: unknown) {
+      addToast(e instanceof Error ? e.message : "Failed to create invite", "error");
     } finally {
       setCreating(false);
     }
@@ -86,16 +88,18 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
       if (!res.ok) throw new Error(await res.text());
       addToast("Invite revoked.", "success");
       await load();
-    } catch (e: any) {
-      addToast(e?.message ?? "Failed to revoke invite", "error");
+    } catch (e: unknown) {
+      addToast(e instanceof Error ? e.message : "Failed to revoke invite", "error");
     }
   }
 
-  function copy(url: string) {
-    navigator.clipboard.writeText(url).then(
-      () => addToast("Link copied.", "success"),
-      () => addToast("Could not copy link", "error")
-    );
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      addToast("Link copied.", "success");
+    } catch {
+      addToast("Could not copy link", "error");
+    }
   }
 
   function openLink(url: string) {
@@ -153,7 +157,13 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
-        <button className="btn" onClick={createInvite} disabled={creating}>
+        <button
+          className="btn"
+          onClick={() => {
+            void createInvite();
+          }}
+          disabled={creating}
+        >
           {creating ? "Creating…" : "Create invite"}
         </button>
       </div>
@@ -219,13 +229,23 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
                         </td>
                         <td className="py-2">
                           <div className="flex gap-2">
-                            <button className="btn" onClick={() => copy(r.joinUrl)}>
+                            <button
+                              className="btn"
+                              onClick={() => {
+                                void copy(r.joinUrl);
+                              }}
+                            >
                               Copy
                             </button>
                             <button className="btn" onClick={() => openLink(r.joinUrl)}>
                               Open
                             </button>
-                            <button className="btn" onClick={() => revoke(r.id)}>
+                            <button
+                              className="btn"
+                              onClick={() => {
+                                void revoke(r.id);
+                              }}
+                            >
                               Revoke
                             </button>
                           </div>
@@ -269,13 +289,23 @@ export default function ActiveInvitesList({ leagueId }: { leagueId: string }) {
                     </div>
 
                     <div className="flex gap-2">
-                      <button className="btn" onClick={() => copy(r.joinUrl)}>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          void copy(r.joinUrl);
+                        }}
+                      >
                         Copy
                       </button>
                       <button className="btn" onClick={() => openLink(r.joinUrl)}>
                         Open
                       </button>
-                      <button className="btn" onClick={() => revoke(r.id)}>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          void revoke(r.id);
+                        }}
+                      >
                         Revoke
                       </button>
                     </div>

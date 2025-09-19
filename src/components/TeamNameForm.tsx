@@ -123,7 +123,9 @@ export default function TeamNameForm(props: { initialName?: string }) {
           maxLength={MAX}
         />
         <button
-          onClick={handleSave}
+          onClick={() => {
+            void handleSave();
+          }}
           disabled={
             saving ||
             !!localValidationError ||
