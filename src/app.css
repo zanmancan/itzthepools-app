@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --card: #0f0f12;
+  --border: #2a2a33;
+}
+.container { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+.card { @apply rounded-2xl p-6 shadow-md; background: var(--card); border:1px solid var(--border); }
+.btn  { @apply inline-flex items-center justify-center rounded-xl px-4 py-2 border; border-color: var(--border); }
+.input{ @apply w-full rounded-xl px-3 py-2 bg-black/40 border; border-color: var(--border); }
+.h1   { @apply text-2xl font-semibold; }
