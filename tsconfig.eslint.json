@@ -2,16 +2,13 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "allowJs": true,
-    "incremental": true,
-    "types": ["node"]
+    "allowJs": true
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    "**/*.js",
-    "**/*.jsx",
-    ".next/types/**/*.ts"
-  ]
+    "next.config.*",
+    ".eslintrc.*",
+    "src/**/*.{ts,tsx,js,jsx}"
+  ],
+  "exclude": ["node_modules", ".next", "dist"]
 }

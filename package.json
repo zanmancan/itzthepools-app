@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start -p 3001",
     "typecheck": "tsc --noEmit",
-    "lint": "next lint"
+    "lint": "next lint",
+    "lint:all": "eslint \"src/**/*.{ts,tsx,js,jsx}\"",
+    "lint:fix": "eslint --fix \"src/**/*.{ts,tsx,js,jsx}\""
   },
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.10.0",
