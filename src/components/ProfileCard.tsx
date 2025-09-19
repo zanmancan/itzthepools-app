@@ -218,7 +218,7 @@ export default function ProfileCard() {
     if (!email) return;
     // prevent hammering the endpoint
     if (lastResetTs && Date.now() - lastResetTs < 60_000) {
-      addToast("You can request another reset email in a minute.", "info");
+      addToast("You can request another reset email in a minute.", "error");
       return;
     }
     setSendingReset(true);
