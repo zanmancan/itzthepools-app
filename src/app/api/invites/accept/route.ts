@@ -1,110 +1,91 @@
 // src/app/api/invites/accept/route.ts
-import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { NextRequest } from "next/server";
+import { supabaseServer, jsonWithRes } from "@/lib/supabaseServer";
 
-export const dynamic = "force-dynamic"; // avoid caching surprises
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-type AcceptBody = { token?: string };
+type Body = { token?: string | null };
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const { client, response } = supabaseServer(req);
+
+  // 1) token from body or query
+  let token = "";
   try {
-    // 1) Parse body (never throw)
-    let token: string | undefined;
-    try {
-      const body = (await req.json()) as AcceptBody;
-      token = body?.token;
-    } catch {
-      token = undefined;
-    }
-    if (!token) {
-      return NextResponse.json({ error: "Missing invite token." }, { status: 400 });
-    }
+    const body = (await req.json()) as Body;
+    if (typeof body?.token === "string") token = body.token.trim();
+  } catch {
+    /* ignore parse error – maybe query has it */
+  }
+  if (!token) {
+    const q = new URL(req.url).searchParams.get("token");
+    if (q) token = q.trim();
+  }
+  if (!token) return jsonWithRes(response, { error: "token is required" }, 400);
 
-    const sb = supabaseServer();
+  // 2) Must be signed in
+  const {
+    data: { user },
+    error: userErr,
+  } = await client.auth.getUser();
+  if (userErr || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
 
-    // 2) Must be signed in
-    const { data: userRes, error: userErr } = await sb.auth.getUser();
-    if (userErr || !userRes?.user) {
-      console.error("accept_invite: getUser failed:", userErr);
-      return NextResponse.json({ error: "You must be signed in to accept an invite." }, { status: 401 });
-    }
-    const user = userRes.user;
+  // 3) Load invite row (RLS must allow: is_public OR email = auth.email())
+  const { data: invite, error: selErr } = await client
+    .from("invites")
+    .select("id, league_id, email, is_public")
+    .eq("token", token)
+    .maybeSingle();
 
-    // 3) Load usable invite
-    const { data: invite, error: inviteErr } = await sb
-      .from("invites")
-      .select("*")
-      .eq("token", token)
-      .is("used_at", null)
-      .single();
-
-    if (inviteErr || !invite) {
-      console.error("accept_invite: load invite failed:", inviteErr);
-      return NextResponse.json({ error: "Invite not found, already used, or invalid." }, { status: 404 });
-    }
-
-    // (optional) expiry
-    if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-      return NextResponse.json({ error: "This invite has expired." }, { status: 410 });
-    }
-
-    // 4) Targeted invite guard
-    const target = String(invite.email ?? "").toLowerCase();
-    if (target && target !== String(user.email ?? "").toLowerCase()) {
-      return NextResponse.json(
-        { error: `This invite was sent to ${invite.email}, but you are signed in as ${user.email}.` },
-        { status: 403 }
-      );
-    }
-
-    // 5) Ensure profile exists (ignore conflict)
-    {
-      const { error } = await sb
-        .from("profiles")
-        .upsert({ id: user.id, email: user.email ?? null } as any, { onConflict: "id" } as any);
-      if (error) {
-        console.error("accept_invite: profiles upsert failed:", error);
-        return NextResponse.json({ error: "Could not create your profile." }, { status: 500 });
-      }
-    }
-
-    // 6) Add membership (idempotent)
-    {
-      const { error } = await sb
-        .from("league_members")
-        .upsert(
-          {
-            league_id: invite.league_id,
-            user_id: user.id,
-            role: invite.role ?? "member",
-          } as any,
-          { onConflict: "league_id,user_id" } as any
-        );
-
-      if (error) {
-        console.error("accept_invite: league_members upsert failed:", error);
-        return NextResponse.json({ error: "Could not add you to the league." }, { status: 500 });
-      }
-    }
-
-    // 7) Mark invite used (best-effort; do not fail the request)
-    {
-      const { error } = await sb
-        .from("invites")
-        .update({ used_at: new Date().toISOString() })
-        .eq("id", invite.id);
-      if (error) {
-        console.warn("accept_invite: marking invite used failed:", error);
-      }
-    }
-
-    // 8) Done
-    return NextResponse.json({ leagueId: invite.league_id });
-  } catch (e: any) {
-    console.error("accept_invite fatal:", e);
-    return NextResponse.json(
-      { error: e?.message ?? "Server error while accepting invite." },
-      { status: 500 }
+  if (selErr) {
+    return jsonWithRes(
+      response,
+      { error: "Failed to load invite.", detail: selErr.message },
+      500
     );
   }
+  if (!invite) return jsonWithRes(response, { error: "Invite not found." }, 404);
+
+  // 4) Email-locked invites must match the signed-in user's email
+  if (!invite.is_public) {
+    const inviteEmail = String(invite.email || "").toLowerCase();
+    const userEmail = String(user.email || "").toLowerCase();
+    if (!inviteEmail || inviteEmail !== userEmail) {
+      return jsonWithRes(
+        response,
+        { error: "This invite is not for your email address." },
+        403
+      );
+    }
+  }
+
+  // 5) Add membership (idempotent)
+  //    Some supabase-js type bundles expect arrays for upsert() – pass [payload]
+  const memberPayload = {
+    league_id: String(invite.league_id),
+    user_id: user.id,
+    role: "member" as const,
+  };
+
+  const { error: upErr } = await client
+    .from("league_members")
+    .upsert([memberPayload], {
+      // Keep this minimal for maximum version compatibility
+      onConflict: "league_id,user_id",
+      // leaving out ignoreDuplicates/returning to avoid overload mismatches
+    });
+
+  if (upErr) {
+    return jsonWithRes(
+      response,
+      { error: "Failed to create membership.", detail: upErr.message },
+      500
+    );
+  }
+
+  // 6) Consume the invite (best-effort)
+  await client.from("invites").delete().eq("id", invite.id);
+
+  return jsonWithRes(response, { ok: true, league_id: invite.league_id }, 200);
 }

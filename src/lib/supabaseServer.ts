@@ -1,89 +1,142 @@
 // src/lib/supabaseServer.ts
+import { NextRequest, NextResponse } from "next/server";
 import { cookies as nextCookies } from "next/headers";
-import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createServerClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Make sure required env is set early and fail with a clear message in dev. */
-function assertSupabaseEnv() {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    throw new Error(
-      "[supabase] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY"
-    );
-  }
+/**
+ * @supabase/ssr cookie typing varies across versions, so we keep the adapter `any`.
+ */
+type AnyCookieOptions = any;
+
+// Cookie adapter used in Route Handlers
+function cookieAdapterForRoute(req: NextRequest, res: NextResponse) {
+  return {
+    get(name: string) {
+      return req.cookies.get(name)?.value;
+    },
+    getAll() {
+      return req.cookies.getAll().map(({ name, value }) => ({ name, value }));
+    },
+    set(name: string, value: string, options: AnyCookieOptions = {}) {
+      try {
+        res.cookies.set({ name, value, ...(options ?? {}) });
+      } catch {
+        /* no-op */
+      }
+    },
+    remove(name: string, options: AnyCookieOptions = {}) {
+      try {
+        res.cookies.set({ name, value: "", ...(options ?? {}), maxAge: 0 });
+      } catch {
+        /* no-op */
+      }
+    },
+  } as any;
+}
+
+// Cookie adapter used in RSC/layout/page (no NextRequest available)
+function cookieAdapterForRSC(res: NextResponse) {
+  const store = nextCookies();
+  return {
+    get(name: string) {
+      return store.get(name)?.value;
+    },
+    getAll() {
+      return store.getAll().map(({ name, value }) => ({ name, value }));
+    },
+    set(name: string, value: string, options: AnyCookieOptions = {}) {
+      try {
+        // We still write to res so Set-Cookie can be forwarded if a caller uses jsonWithRes
+        res.cookies.set({ name, value, ...(options ?? {}) });
+      } catch {
+        /* no-op */
+      }
+    },
+    remove(name: string, options: AnyCookieOptions = {}) {
+      try {
+        res.cookies.set({ name, value: "", ...(options ?? {}), maxAge: 0 });
+      } catch {
+        /* no-op */
+      }
+    },
+  } as any;
 }
 
 /**
- * Server Components / actions client.
- * - Reads auth cookies from the current request.
- * - Does NOT write cookies (RSC cookies are read-only).
+ * OVERLOADS
+ * =========
+ * supabaseServer()                    -> SupabaseClient           (for pages/RSC)
+ * supabaseServer(req: NextRequest)    -> { client, response, url } (for Route Handlers)
  */
-export function supabaseServer() {
-  assertSupabaseEnv();
+export function supabaseServer(): SupabaseClient<any, "public", any>;
+export function supabaseServer(
+  req: NextRequest
+): { client: SupabaseClient<any, "public", any>; response: NextResponse; url: URL };
+export function supabaseServer(req?: NextRequest) {
+  const res = new NextResponse(null, { headers: new Headers() });
 
-  const cookieStore = nextCookies(); // read-only in RSC
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        // no-ops in RSC; writing happens in route handlers
-        set(_name: string, _value: string, _options?: CookieOptions) {},
-        remove(_name: string, _options?: CookieOptions) {},
-      },
-    }
-  );
-}
-
-/**
- * Route Handlers client.
- * - Reads cookies from the request.
- * - Writes cookie changes to the provided (or auto-created) NextResponse.
- *
- * Usage (pattern 1 – create response first):
- *   export async function GET(req: NextRequest) {
- *     const { client, response } = supabaseRoute(req);
- *     // ... do auth stuff ...
- *     response.headers.set("x-foo", "bar");
- *     return response; // or NextResponse.json(data, { headers: response.headers })
- *   }
- *
- * Usage (pattern 2 – just need the client; you’ll return your own response):
- *   const { client } = supabaseRoute(req) // cookie writes still attach to an internal response
- */
-export function supabaseRoute(req?: NextRequest) {
-  assertSupabaseEnv();
-
-  // If caller gave us a request, wire cookie reads from it.
-  // We’ll always create a NextResponse to collect cookie writes.
-  const res = NextResponse.next();
-
-  // Helpers that mirror the @supabase/ssr requirements
-  const cookieAdapter = {
-    get: (name: string) => {
-      if (req) return req.cookies.get(name)?.value;
-      // fallback to current context if not in a route (rare)
-      return nextCookies().get(name)?.value;
-    },
-    set: (name: string, value: string, options?: CookieOptions) => {
-      res.cookies.set(name, value, options);
-    },
-    remove: (name: string, options?: CookieOptions) => {
-      res.cookies.set(name, "", { ...options, maxAge: 0 });
-    },
-  };
+  const cookiesAdapter = req
+    ? cookieAdapterForRoute(req, res)
+    : cookieAdapterForRSC(res);
 
   const client = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: cookieAdapter }
+    { cookies: cookiesAdapter }
   );
 
-  return { client, response: res };
+  if (!req) {
+    // Pages/RSC usage — return the client directly so existing code using `sb.auth` still works
+    return client;
+  }
+  // Route Handler usage — return full bundle so caller can forward cookies via jsonWithRes(...)
+  return { client, response: res, url: new URL(req.url) };
 }
 
-/** Optional alias some files prefer (won’t break existing imports) */
-export const supabaseRouteClient = supabaseRoute;
+/**
+ * Back-compat alias used in some routes: identical to calling supabaseServer(req).
+ */
+export function supabaseRoute(req: NextRequest) {
+  return supabaseServer(req);
+}
+
+// Optional default export for convenience
+export default supabaseServer;
+
+/** Build absolute URL preferring env (Netlify) then request origin. */
+export function absoluteUrl(reqOrUrl: NextRequest | URL | undefined, path: string) {
+  const envOrigin =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_SITE_URL;
+  if (envOrigin) return new URL(path, envOrigin).toString();
+
+  const u =
+    reqOrUrl instanceof URL
+      ? reqOrUrl
+      : reqOrUrl && "nextUrl" in (reqOrUrl as any)
+      ? (reqOrUrl as NextRequest).nextUrl
+      : undefined;
+
+  const origin = u ? `${u.protocol}//${u.host}` : "http://localhost";
+  return new URL(path, origin).toString();
+}
+
+/** JSON response that forwards any cookies gathered on `base`. */
+export function jsonWithRes(
+  base: NextResponse,
+  body: unknown,
+  init?: number | ResponseInit
+) {
+  const status =
+    typeof init === "number" ? init : (init as ResponseInit | undefined)?.status ?? 200;
+  const initObj = typeof init === "object" && init ? init : undefined;
+
+  const out = NextResponse.json(body, { status, ...initObj });
+  try {
+    base.cookies.getAll().forEach((c) => out.cookies.set(c));
+  } catch {
+    /* no-op */
+  }
+  return out;
+}
