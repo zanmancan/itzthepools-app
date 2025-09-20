@@ -13,11 +13,13 @@ export default function InvitePage({ params }: Props) {
   const pathname = usePathname();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
   async function acceptInvite() {
     setBusy(true);
     setError(null);
+    setDetail(null);
     setOkMsg(null);
     try {
       const res = await fetch("/api/invites/accept", {
@@ -30,13 +32,13 @@ export default function InvitePage({ params }: Props) {
       const data = await res.json().catch(() => ({} as any));
 
       if (res.status === 401 || data?.error === "Not authenticated.") {
-        // Send them to signup and bounce back to this invite after
         router.push(`/signup?next=${encodeURIComponent(pathname)}`);
         return;
       }
 
       if (!res.ok || data?.error) {
         setError(data?.error || "Failed to accept invite.");
+        if (data?.detail) setDetail(String(data.detail));
         setBusy(false);
         return;
       }
@@ -86,6 +88,7 @@ export default function InvitePage({ params }: Props) {
         <div className="mt-6 text-red-400">
           <div className="font-semibold">Error</div>
           <div className="text-sm">{error}</div>
+          {detail && <div className="text-xs mt-1 opacity-80">{detail}</div>}
         </div>
       )}
 
