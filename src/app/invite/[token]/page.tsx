@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabaseServer";
+import InviteAuthBlock from "@/components/InviteAuthBlock";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ export default async function InviteLandingPage({ params }: { params: { token: s
   const token = params.token;
   const sb = supabaseServer();
 
+  // 1) Preview invite so we can render a friendly page for signed-out users
   const { data: preview, error: previewErr } = await sb.rpc("invite_preview", { p_token: token });
   if (previewErr || !preview) {
     return (
@@ -26,34 +28,33 @@ export default async function InviteLandingPage({ params }: { params: { token: s
   const targetEmail = (preview as any).target_email as string | null;
   const isPublic = !!(preview as any).is_public;
 
+  // 2) Check session
   const { data: { user }, error: userErr } = await sb.auth.getUser();
   const isAuthed = !!user && !userErr;
 
+  // 3) Signed-out UX: **Hybrid**
   if (!isAuthed) {
-    const next = encodeURIComponent(`/invite/${token}`);
     return (
-      <div className="container mx-auto max-w-xl p-8 space-y-6">
+      <div className="container mx-auto max-w-xl p-10 space-y-6">
         <h1 className="text-3xl font-semibold">You’re invited! 🎉</h1>
         <p className="text-gray-300">
           You’ve been invited to join <span className="font-semibold">{leagueName}</span>.
         </p>
-        {isPublic && <p className="text-sm text-emerald-400">This is a public invite — anyone with the link can join.</p>}
-        <div className="space-y-2">
-          <a className="inline-block rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500" href={`/login?next=${next}`}>
-            Sign in to accept
-          </a>
-          <div className="text-sm text-gray-400">
-            New here?{" "}
-            <a className="underline" href={`/signup?next=${next}`}>
-              Create an account
-            </a>{" "}
-            and you’ll be brought back to finish joining the league.
-          </div>
-        </div>
+        {isPublic && (
+          <p className="text-sm text-emerald-400">This is a public invite — anyone with the link can join.</p>
+        )}
+
+        {/* Primary: passwordless continue (magic link / OTP), plus small links */}
+        <InviteAuthBlock token={token} />
+
+        <p className="text-xs text-gray-500">
+          After you sign in or create an account, we’ll bring you right back here to finish joining the league.
+        </p>
       </div>
     );
   }
 
+  // 4) Wrong-account guard for targeted invites
   if (targetEmail && !sameEmail(targetEmail, user!.email)) {
     return (
       <div className="container mx-auto max-w-xl p-8 space-y-4">
@@ -72,6 +73,7 @@ export default async function InviteLandingPage({ params }: { params: { token: s
     );
   }
 
+  // 5) Accept immediately (public invite OR matching targeted invite)
   const { data, error } = await sb.rpc("accept_invite", { p_token: token });
   if (error) {
     return (
