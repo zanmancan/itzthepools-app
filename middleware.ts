@@ -1,45 +1,26 @@
 // middleware.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { env } from "@/lib/env";
 
+// Only protect these paths. We do NOT touch /api/* or static assets.
 const PROTECTED = [/^\/dashboard(?:\/.*)?$/, /^\/league(?:\/.*)?$/];
 
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-
-  const supabase = createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
-    cookies: {
-      get(name: string) {
-        return req.cookies.get(name)?.value;
-      },
-      set(name: string, value: string, options: CookieOptions) {
-        // object-style to satisfy types
-        res.cookies.set({ name, value, ...options });
-      },
-      remove(name: string, options: CookieOptions) {
-        res.cookies.set({ name, value: "", ...options, maxAge: 0 });
-      },
-    },
-  });
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
+export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   const needsAuth = PROTECTED.some((re) => re.test(path));
-  const isAuthCallback = path.startsWith("/auth/complete");
+  if (!needsAuth) return NextResponse.next();
 
-  if (needsAuth && !session && !isAuthCallback) {
+  // Soft gate: if no Supabase cookie at all, bounce to login.
+  // Let the server component on the page double-check the real session.
+  const hasSbCookie = req.cookies.getAll().some((c) => c.name.startsWith("sb-"));
+  if (!hasSbCookie) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", path);
     return NextResponse.redirect(url);
   }
 
-  return res;
+  return NextResponse.next();
 }
 
 export const config = {
