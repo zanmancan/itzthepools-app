@@ -1,20 +1,11 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
+#!/usr/bin/env node
+// Husky pre-commit (Windows & Desktop safe)
+const { spawnSync } = require('node:child_process');
 
-echo "🔎 lint-staged…"
-npx --no -- lint-staged
-rc=$?
-if [ $rc -ne 0 ]; then
-  echo "❌ lint-staged failed"
-  exit $rc
-fi
+function run(cmd, args) {
+  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}
 
-echo "🔡 typecheck…"
-npm run -s typecheck
-rc=$?
-if [ $rc -ne 0 ]; then
-  echo "❌ typecheck failed"
-  exit $rc
-fi
-
-echo "✅ pre-commit checks passed"
+run('npx', ['--no', '--', 'lint-staged']);
+run('npm', ['run', '-s', 'typecheck']);

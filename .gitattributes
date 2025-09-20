@@ -4,3 +4,4 @@
 # Keep Husky hooks POSIX-friendly on Windows
 .husky/* text eol=lf
 *.sh text eol=lf
+/.husky/* text eol=lf

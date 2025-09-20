@@ -53,5 +53,13 @@
       "tailwindcss": {},
       "autoprefixer": {}
     }
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --cache --cache-location .cache/eslint --fix"
+    ],
+    "*.{json,md,css,scss,html,yml,yaml}": [
+      "prettier --write"
+    ]
   }
 }
