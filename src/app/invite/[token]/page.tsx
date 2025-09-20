@@ -1,32 +1,65 @@
 // src/app/invite/[token]/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 
 type Props = { params: { token: string } };
 
+// very light validation: letters/numbers/spaces/_/-, 2..30 chars
+function validateTeamName(name: string) {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return "Team name must be at least 2 characters.";
+  if (trimmed.length > 30) return "Team name must be 30 characters or fewer.";
+  if (!/^[A-Za-z0-9 _-]+$/.test(trimmed))
+    return "Only letters, numbers, spaces, dashes and underscores are allowed.";
+  return null;
+}
+
 export default function InvitePage({ params }: Props) {
   const token = params.token;
   const router = useRouter();
   const pathname = usePathname();
+
+  const [teamName, setTeamName] = useState("");
+  const teamError = useMemo(() => validateTeamName(teamName), [teamName]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
+  // small UX nicety: restore last name typed for this invite (per-token)
+  useEffect(() => {
+    const key = `invite-teamname:${token}`;
+    const cached = localStorage.getItem(key);
+    if (cached) setTeamName(cached);
+  }, [token]);
+
+  function onTeamChange(v: string) {
+    setTeamName(v);
+    const key = `invite-teamname:${token}`;
+    try {
+      localStorage.setItem(key, v);
+    } catch {
+      /* no-op */
+    }
+  }
+
   async function acceptInvite() {
+    if (teamError) return; // should never happen if button is disabled
     setBusy(true);
     setError(null);
     setDetail(null);
     setOkMsg(null);
+
     try {
       const res = await fetch("/api/invites/accept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ token, teamName }),
       });
 
       const data = await res.json().catch(() => ({} as any));
@@ -66,12 +99,29 @@ export default function InvitePage({ params }: Props) {
         <div className="font-mono text-neutral-200 break-all">{token}</div>
       </div>
 
-      <p className="mb-6">Review the details and choose an option below.</p>
+      <div className="mb-6">
+        <label className="block text-sm text-neutral-300 mb-2" htmlFor="teamName">
+          Team name <span className="text-red-400">*</span>
+        </label>
+        <input
+          id="teamName"
+          value={teamName}
+          onChange={(e) => onTeamChange(e.target.value)}
+          placeholder="e.g., Dunk Lords"
+          className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 outline-none focus:border-blue-500"
+          autoComplete="off"
+          maxLength={30}
+        />
+        <div className="mt-1 flex items-center justify-between text-xs text-neutral-400">
+          <span>{teamName.trim().length}/30</span>
+          {teamError && <span className="text-red-400">{teamError}</span>}
+        </div>
+      </div>
 
       <div className="flex gap-3">
         <button
           onClick={() => void acceptInvite()}
-          disabled={busy}
+          disabled={busy || !!teamError}
           className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-5 py-2 rounded-lg"
         >
           {busy ? "Accepting…" : "Accept invite"}
