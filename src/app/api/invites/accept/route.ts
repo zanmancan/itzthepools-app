@@ -31,25 +31,34 @@ export async function POST(req: NextRequest) {
   } = await client.auth.getUser();
   if (userErr || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
 
-  // 3) Read invite (RLS must allow: (email is null) OR (email = auth.email()))
-  const { data: invite, error: selErr } = await client
+  // 3) Mark invite accepted in a single statement and RETURN league_id
+  //    (avoids needing separate SELECT policy)
+  const { data: updated, error: updErr } = await client
     .from("invites")
-    .select("id, league_id, email, accepted")
+    .update({ accepted: true })
     .eq("token", token)
+    .eq("accepted", false)
+    .select("id, league_id, email")
     .maybeSingle();
 
-  if (selErr) {
+  if (updErr) {
     return jsonWithRes(
       response,
-      { error: "Failed to load invite.", detail: selErr.message },
+      { error: "Failed to accept invite.", detail: updErr.message },
       500
     );
   }
-  if (!invite) return jsonWithRes(response, { error: "Invite not found." }, 404);
-  if (invite.accepted) return jsonWithRes(response, { error: "Invite already used." }, 409);
+  if (!updated) {
+    // Either wrong token, already accepted, or not authorized by RLS
+    return jsonWithRes(
+      response,
+      { error: "Invite not found or not accessible." },
+      404
+    );
+  }
 
-  // 4) If email-locked, enforce match
-  const inviteEmail = String(invite.email || "").toLowerCase();
+  // 4) If the invite had an email lock, ensure it matches the current user
+  const inviteEmail = String(updated.email || "").toLowerCase();
   const userEmail = String(user.email || "").toLowerCase();
   if (inviteEmail && inviteEmail !== userEmail) {
     return jsonWithRes(
@@ -60,18 +69,15 @@ export async function POST(req: NextRequest) {
   }
 
   // 5) Add membership (idempotent)
-  // Some supabase-js versions want an array in upsert() generics — pass [payload]
-  const memberPayload = {
-    league_id: String(invite.league_id),
+  const member = {
+    league_id: String(updated.league_id),
     user_id: user.id,
     role: "member" as const,
   };
 
   const { error: upErr } = await client
     .from("league_members")
-    .upsert([memberPayload], {
-      onConflict: "league_id,user_id",
-    });
+    .upsert([member], { onConflict: "league_id,user_id" });
 
   if (upErr) {
     return jsonWithRes(
@@ -81,26 +87,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 6) Mark invite accepted (best-effort) or delete it — choose one policy-wise.
-  // If your schema has `accepted boolean`, update it; else delete row.
-  const { error: updErr } = await client
-    .from("invites")
-    .update({ accepted: true })
-    .eq("id", invite.id);
-
-  if (updErr) {
-    // Not fatal for UX; still return ok=true so they can proceed.
-    return jsonWithRes(
-      response,
-      {
-        ok: true,
-        warning: "Membership created but invite was not marked accepted.",
-        league_id: invite.league_id,
-        detail: updErr.message,
-      },
-      200
-    );
-  }
-
-  return jsonWithRes(response, { ok: true, league_id: invite.league_id }, 200);
+  return jsonWithRes(response, { ok: true, league_id: updated.league_id }, 200);
 }
