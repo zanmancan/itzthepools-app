@@ -1,109 +1,73 @@
-// src/app/auth/reset/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
-
-type Stage = "checking" | "form";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabaseBrowser } from "@/lib/supabase/browser";
 
 export default function ResetPasswordPage() {
-  const params = useSearchParams(); // client hook
-  const [stage, setStage] = useState<Stage>("checking");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+  const router = useRouter();
 
-  useEffect(() => {
-    let mounted = true;
+  // Do the async work here
+  async function doUpdatePassword(pw: string) {
+    const sb = supabaseBrowser();
+    const { error } = await sb.auth.updateUser({ password: pw });
+    if (error) throw error;
+  }
 
-    // mark IIFE as intentionally not awaited
+  // Non-async handler to satisfy eslint(no-misused-promises)
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setErr(null);
+    setOk(false);
+
+    // Run the async flow without returning a Promise to React
     void (async () => {
       try {
-        // ✅ strict-safe access to the URL param
-        const code = params?.get("code");
-
-        // If no code in URL, just show the form (user may already have a temp session)
-        if (!code) {
-          if (!mounted) return;
-          setStage("form");
-          return;
-        }
-
-        // If arriving via a valid reset link, Supabase should create a temp session
-        const { data, error } = await supabase.auth.getSession();
-        if (!mounted) return;
-        if (error) throw error;
-
-        if (data.session) {
-          setStage("form");
-        } else {
-          setErr("This password reset link is invalid or expired. Request a new one.");
-        }
-      } catch (e) {
-        if (!mounted) return;
-        // eslint-disable-next-line no-console
-        console.error("reset: session check failed", e);
-        setErr("Unable to validate reset link.");
+        await doUpdatePassword(password);
+        setOk(true);
+        // brief success pause
+        setTimeout(() => router.replace("/dashboard"), 600);
+      } catch (e: any) {
+        console.error(e);
+        setErr(e?.message ?? "Unexpected error updating password.");
       }
     })();
-
-    return () => {
-      mounted = false;
-    };
-  }, [params]);
-
-  async function setNewPassword() {
-    setBusy(true);
-    setErr(null);
-    setMsg(null);
-    try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-
-      setMsg("Password updated. You can close this tab.");
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      setErr(message || "Failed to update password");
-    } finally {
-      setBusy(false);
-    }
   }
 
   return (
-    <div className="card max-w-md space-y-4" data-testid="reset-password">
-      <div className="h1">Reset password</div>
+    <main className="mx-auto max-w-md p-6">
+      <h1 className="text-2xl font-semibold mb-4">Set a new password</h1>
 
-      {err && <p className="text-red-400">{err}</p>}
-
-      {stage === "form" ? (
-        <>
+      <form onSubmit={onSubmit} className="space-y-4">
+        <label className="block">
+          <span className="text-sm">New password</span>
           <input
-            className="input"
             type="password"
-            placeholder="New password"
+            required
+            minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-            minLength={8}
+            className="mt-1 w-full rounded border px-3 py-2 bg-transparent"
+            placeholder="••••••••"
           />
+        </label>
 
-          {/* fire-and-forget */}
-          <button
-            className="btn"
-            disabled={busy || password.length < 8}
-            onClick={() => void setNewPassword()}
-          >
-            {busy ? "Saving…" : "Set password"}
-          </button>
+        <button className="w-full rounded bg-emerald-600 py-2 font-medium hover:opacity-90">
+          Save password
+        </button>
+      </form>
 
-          {msg && <p className="text-emerald-400">{msg}</p>}
-          <p className="text-sm opacity-60">Minimum 8 characters (or your configured policy).</p>
-        </>
-      ) : (
-        !err && <p className="opacity-70">Validating reset link…</p>
+      {ok && (
+        <p className="mt-4 text-sm text-emerald-400">
+          Password updated. Redirecting…
+        </p>
       )}
-    </div>
+      {err && (
+        <p className="mt-4 text-sm text-rose-400">Error: {err}</p>
+      )}
+    </main>
   );
 }

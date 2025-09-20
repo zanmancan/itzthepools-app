@@ -1,33 +1,36 @@
-// lib/env.ts
-// Build-time validation to keep only NEXT_PUBLIC_* on the client.
-// We deliberately DO NOT allow server secrets here.
+// /lib/env.ts
+// Centralized, typed access to env vars with nice errors.
+// Supports both your current TC_* names and the plain names.
 
-import { z } from "zod";
-
-const clientSchema = z.object({
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(10),
-  // Add other NEXT_PUBLIC_* as needed
-});
-
-const raw = {
-  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-};
-
-// Guard against accidentally exposing server secrets by naming.
-const forbidden = Object.keys(process.env).filter(
-  (k) =>
-    (k.startsWith("SUPABASE_") || k.includes("SERVICE_ROLE") || k.includes("DATABASE_URL")) &&
-    // if someone accidentally prefixed a secret with NEXT_PUBLIC_, scream:
-    k.startsWith("NEXT_PUBLIC_")
-);
-if (forbidden.length) {
-  throw new Error(
-    `Security error: found dangerous keys exposed to the client: ${forbidden.join(
-      ", "
-    )}. Remove them or rename without NEXT_PUBLIC_.`
-  );
+function must(name: string, value: string | undefined) {
+  if (!value || value.trim() === "") {
+    throw new Error(
+      `[env] Missing "${name}". Set it in Netlify (and .env.local for dev).`
+    );
+  }
+  return value;
 }
 
-export const env = clientSchema.parse(raw);
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ??
+  process.env.NEXT_PUBLIC_TC_SUPABASE_URL;
+
+const SUPABASE_ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  process.env.NEXT_PUBLIC_TC_SUPABASE_ANON_KEY;
+
+// Best-effort site URL for redirects (works on Netlify/Vercel/local)
+const inferredSiteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  process.env.NEXT_PUBLIC_NETLIFY_SITE_URL ??
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined) ??
+  "http://localhost:3000";
+
+export const env = {
+  supabaseUrl: must("NEXT_PUBLIC_SUPABASE_URL (or NEXT_PUBLIC_TC_SUPABASE_URL)", SUPABASE_URL),
+  supabaseAnonKey: must(
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY (or NEXT_PUBLIC_TC_SUPABASE_ANON_KEY)",
+    SUPABASE_ANON_KEY
+  ),
+  siteUrl: inferredSiteUrl,
+} as const;

@@ -1,28 +1,20 @@
-// src/app/login/page.tsx
 "use client";
 
 import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { supabaseBrowser } from "@/lib/supabase/browser";
+import { env } from "@/lib/env";
 
 export default function LoginPage() {
   const params = useSearchParams();
   const router = useRouter();
+  const next = params?.get("next") ?? params?.get("redirect") ?? "/dashboard";
 
-  // Strict-safe read of ?next=
-  const next = params?.get("next") ?? "/dashboard";
-
-  // Two tabs: Sign in (password) and Create account (email verification)
-  const [tab, setTab] =
-    useState<"signin" | "signup">("signin");
-
-  // shared
+  const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-
-  // password login
   const [password, setPassword] = useState("");
 
   async function signIn() {
@@ -30,14 +22,26 @@ export default function LoginPage() {
     setErr(null);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const sb = supabaseBrowser();
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      // success
+
+      // IMPORTANT: sync the session to server cookies
+      if (data.session) {
+        await fetch("/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "SIGNED_IN",
+            session: {
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            },
+          }),
+        });
+      }
+
       router.replace(next);
-      // or: window.location.href = next;
     } catch (e: any) {
       setErr(e?.message ?? "Sign in failed");
     } finally {
@@ -45,21 +49,16 @@ export default function LoginPage() {
     }
   }
 
-  // Email-only signup → sends verification (OTP) link.
-  // When they click it, they will land on /auth/complete to set a password.
   async function startEmailVerification() {
     setBusy(true);
     setErr(null);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
+      const sb = supabaseBrowser();
+      const redirectTo = `${env.siteUrl}/auth/complete?redirect=${encodeURIComponent(next)}`;
+      const { error } = await sb.auth.signInWithOtp({
         email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: `${location.origin}/auth/complete?next=${encodeURIComponent(
-            next
-          )}`,
-        },
+        options: { shouldCreateUser: true, emailRedirectTo: redirectTo },
       });
       if (error) throw error;
       setMsg("Verification link sent. Check your email to continue.");
@@ -75,8 +74,9 @@ export default function LoginPage() {
     setErr(null);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${location.origin}/auth/reset`,
+      const sb = supabaseBrowser();
+      const { error } = await sb.auth.resetPasswordForEmail(email, {
+        redirectTo: `${env.siteUrl}/auth/reset`,
       });
       if (error) throw error;
       setMsg("Password reset email sent.");
@@ -92,16 +92,10 @@ export default function LoginPage() {
       <div className="h1">Account</div>
 
       <div className="flex gap-2">
-        <button
-          className={`btn ${tab === "signin" ? "" : "opacity-60"}`}
-          onClick={() => setTab("signin")}
-        >
+        <button className={`btn ${tab === "signin" ? "" : "opacity-60"}`} onClick={() => setTab("signin")}>
           Sign in
         </button>
-        <button
-          className={`btn ${tab === "signup" ? "" : "opacity-60"}`}
-          onClick={() => setTab("signup")}
-        >
+        <button className={`btn ${tab === "signup" ? "" : "opacity-60"}`} onClick={() => setTab("signup")}>
           Create account
         </button>
       </div>
@@ -124,11 +118,7 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
           />
           <div className="flex gap-2">
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() => void signIn()}
-            >
+            <button className="btn" disabled={busy} onClick={() => void signIn()}>
               {busy ? "Signing in…" : "Sign in"}
             </button>
             <button
@@ -145,11 +135,7 @@ export default function LoginPage() {
 
       {tab === "signup" && (
         <>
-          <button
-            className="btn"
-            disabled={busy || !email}
-            onClick={() => void startEmailVerification()}
-          >
+          <button className="btn" disabled={busy || !email} onClick={() => void startEmailVerification()}>
             {busy ? "Sending…" : "Send verification link"}
           </button>
           <p className="text-sm opacity-70">

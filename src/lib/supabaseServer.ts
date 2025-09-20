@@ -1,16 +1,45 @@
 // src/lib/supabaseServer.ts
-import { cookies } from "next/headers";
-import {
-  createServerComponentClient,
-  createRouteHandlerClient,
-} from "@supabase/auth-helpers-nextjs";
+// SSR helpers using @supabase/ssr, with legacy-compatible exports.
 
-/** For Server Components (layout/page server code) */
+import { cookies } from "next/headers";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { env } from "@/lib/env";
+
+// For Server Components / server actions
 export function supabaseServer() {
-  return createServerComponentClient({ cookies });
+  const jar = cookies();
+
+  return createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
+    cookies: {
+      get(name: string) {
+        return jar.get(name)?.value;
+      },
+      set(name: string, value: string, options: CookieOptions) {
+        // Use object-style so types line up with Next + @supabase/ssr
+        jar.set({ name, value, ...options });
+      },
+      remove(name: string, options: CookieOptions) {
+        jar.set({ name, value: "", ...options, maxAge: 0 });
+      },
+    },
+  });
 }
 
-/** For Route Handlers (/api/*) */
+// For Route Handlers (/app/api/**) – compatibility export
 export function supabaseRoute() {
-  return createRouteHandlerClient({ cookies });
+  const jar = cookies();
+
+  return createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
+    cookies: {
+      get(name: string) {
+        return jar.get(name)?.value;
+      },
+      set(name: string, value: string, options: CookieOptions) {
+        jar.set({ name, value, ...options });
+      },
+      remove(name: string, options: CookieOptions) {
+        jar.set({ name, value: "", ...options, maxAge: 0 });
+      },
+    },
+  });
 }
