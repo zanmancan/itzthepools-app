@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { supabaseServer } from "@/lib/supabaseServer";
 import Nav from "@/components/Nav";
 import ToastProvider from "@/components/Toast";
+import AuthSync from "@/components/AuthSync"; // keeps Supabase cookies in sync client↔server
 
 export const metadata: Metadata = {
   title: "Itz The Pools",
@@ -24,6 +25,9 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+        {/* Client hook that syncs Supabase auth events to HttpOnly cookies */}
+        <AuthSync />
+
         {/* Skip link for a11y */}
         <a
           href="#app-main"
