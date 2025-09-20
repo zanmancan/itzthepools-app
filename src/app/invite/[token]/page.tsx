@@ -3,11 +3,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
 type Props = { params: { token: string } };
 
-// very light validation: letters/numbers/spaces/_/-, 2..30 chars
 function validateTeamName(name: string) {
   const trimmed = name.trim();
   if (trimmed.length < 2) return "Team name must be at least 2 characters.";
@@ -21,8 +20,9 @@ export default function InvitePage({ params }: Props) {
   const token = params.token;
   const router = useRouter();
   const pathname = usePathname();
-
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
@@ -34,22 +34,24 @@ export default function InvitePage({ params }: Props) {
     [authed, teamName]
   );
 
-  // Detect auth status (show team-name only after login)
+  // Probe auth: show team-name only after login; cache team name between steps
   useEffect(() => {
-    let mounted = true;
     (async () => {
       try {
         const res = await fetch("/api/auth/whoami", { credentials: "same-origin" });
-        setAuthed(res.ok);
         if (res.ok) {
+          const data = await res.json();
+          setAuthed(true);
+          setEmail(data?.email ?? null);
           const cached = localStorage.getItem(`invite-teamname:${token}`);
           if (cached) setTeamName(cached);
+        } else {
+          setAuthed(false);
         }
       } catch {
         setAuthed(false);
       }
     })();
-    return () => { mounted = false; };
   }, [token]);
 
   function onTeamChange(v: string) {
@@ -64,13 +66,10 @@ export default function InvitePage({ params }: Props) {
     setOkMsg(null);
 
     try {
-      // If not logged in, send to signup; we’ll come back to this page (Step 3 -> Step 5).
       if (!authed) {
         router.push(`/signup?next=${encodeURIComponent(pathname)}`);
         return;
       }
-
-      // Logged in: require a valid team name here (UI + server both enforce).
       if (teamError) {
         setError(teamError);
         setBusy(false);
@@ -83,8 +82,14 @@ export default function InvitePage({ params }: Props) {
         credentials: "same-origin",
         body: JSON.stringify({ token, teamName }),
       });
-
       const data = await res.json().catch(() => ({} as any));
+
+      if (res.status === 401 && String(data?.error || "").toLowerCase().includes("verify")) {
+        // Email not verified -> guide to verify screen
+        const e = email ?? "";
+        router.push(`/verify?email=${encodeURIComponent(e)}&next=${encodeURIComponent(pathname)}`);
+        return;
+      }
 
       if (!res.ok || data?.error) {
         setError(data?.error || "Failed to accept invite.");
@@ -116,7 +121,6 @@ export default function InvitePage({ params }: Props) {
         <div className="font-mono text-neutral-200 break-all">{token}</div>
       </div>
 
-      {/* Team name section only after login (Step 5) */}
       {authed ? (
         <div className="mb-6">
           <label className="block text-sm text-neutral-300 mb-2" htmlFor="teamName">
@@ -137,9 +141,7 @@ export default function InvitePage({ params }: Props) {
           </div>
         </div>
       ) : (
-        <p className="mb-6 text-sm text-neutral-400">
-          You’ll set your team name after signing in.
-        </p>
+        <p className="mb-6 text-sm text-neutral-400">You’ll set your team name after signing in.</p>
       )}
 
       <div className="flex gap-3">
@@ -150,10 +152,7 @@ export default function InvitePage({ params }: Props) {
         >
           {busy ? "Accepting…" : "Accept invite"}
         </button>
-        <Link
-          href="/dashboard"
-          className="border border-neutral-600 hover:bg-neutral-800 px-5 py-2 rounded-lg"
-        >
+        <Link href="/dashboard" className="border border-neutral-600 hover:bg-neutral-800 px-5 py-2 rounded-lg">
           Decline
         </Link>
       </div>

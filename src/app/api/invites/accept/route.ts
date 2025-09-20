@@ -19,7 +19,7 @@ function normalizeTeamName(n?: string | null) {
 export async function POST(req: NextRequest) {
   const { client, response } = supabaseServer(req);
 
-  // 1) Parse token (+ optional teamName)
+  // 1) Parse
   let token = "";
   let teamNameIn: string | null | undefined = undefined;
   try {
@@ -35,16 +35,20 @@ export async function POST(req: NextRequest) {
   }
   if (!token) return jsonWithRes(response, { error: "token is required" }, 400);
 
-  // 2) Auth
+  // 2) Auth + email verified
   const { data: { user }, error: userErr } = await client.auth.getUser();
   if (userErr || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
 
-  // 3) Team name: use provided one OR existing one on profile — otherwise block
+  // 🔒 Require verified email before joining any league
+  if (!user.email_confirmed_at) {
+    return jsonWithRes(response, { error: "Please verify your email to continue." }, 401);
+  }
+
+  // 3) Team Name: provided or existing on profile (otherwise block)
   let teamName: string | null = null;
   const norm = normalizeTeamName(teamNameIn ?? null);
   if (norm.ok && norm.value) {
     teamName = norm.value;
-    // upsert onto profile
     const { error: profileErr } = await client
       .from("profiles")
       .upsert([{ id: user.id, team_name: teamName }], { onConflict: "id" });
@@ -56,7 +60,6 @@ export async function POST(req: NextRequest) {
       );
     }
   } else {
-    // load current profile name
     const { data: p, error: profErr } = await client
       .from("profiles")
       .select("team_name")
@@ -97,9 +100,7 @@ export async function POST(req: NextRequest) {
       500
     );
   }
-  if (!inv) {
-    return jsonWithRes(response, { error: "Invite not found, already used, or not accessible." }, 404);
-  }
+  if (!inv) return jsonWithRes(response, { error: "Invite not found, already used, or not accessible." }, 404);
 
   // 5) Enforce email-locked invite
   const inviteEmail = String(inv.email ?? "").toLowerCase();
@@ -127,7 +128,6 @@ export async function POST(req: NextRequest) {
   if (!existing) {
     const payload = { league_id: String(inv.league_id), user_id: user.id, role: "member" as const };
     const { error: insErr } = await client.from("league_members").insert([payload]);
-
     if (insErr && insErr.code !== "23505") {
       return jsonWithRes(
         response,
