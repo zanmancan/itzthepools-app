@@ -1,260 +1,96 @@
 // src/app/invite/[token]/page.tsx
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { useRouter } from "next/navigation";
 
-export const dynamic = "force-dynamic";
+type Props = { params: { token: string } };
 
-type Props = {
-  params: { token: string };
-  searchParams?: { do?: "accept" | "decline" };
-};
-
-export default async function InvitePage({ params, searchParams }: Props) {
+export default function InvitePage({ params }: Props) {
   const token = params.token;
-  const sb = supabaseServer();
-  const { data: s } = await sb.auth.getSession();
-  const nextUrl = `/invite/${encodeURIComponent(token)}`;
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
 
-  // If the user is already signed in and clicked an action, handle it server-side.
-  if (s.session && searchParams?.do === "accept") {
-    const leagueId = await acceptInvite(token);
-    redirect(`/league/${leagueId}`);
-  }
-  if (s.session && searchParams?.do === "decline") {
-    await declineInviteSilently(token);
-    redirect("/dashboard");
-  }
-
-  // Signed-in: show review (no auto-accept; user must choose)
-  if (s.session) {
-    const meta = await getInviteMeta(token);
-    return <SignedInReview token={token} meta={meta} />;
-  }
-
-  // Signed-out: show auth entry points + (optional) magic/OTP, all returning here
-  return <SignedOutLanding nextUrl={nextUrl} />;
-}
-
-/* ------------------------- helpers (server) ------------------------- */
-
-async function getInviteMeta(token: string): Promise<{
-  leagueName?: string;
-  inviterEmail?: string;
-}> {
-  try {
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/invites/open?token=${encodeURIComponent(
-        token
-      )}`,
-      { cache: "no-store" }
-    );
-    if (!res.ok) return {};
-    return (await res.json()) as any;
-  } catch {
-    return {};
-  }
-}
-
-async function acceptInvite(token: string): Promise<string> {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/invites/accept`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token }),
-      cache: "no-store",
-    }
-  );
-  if (!res.ok) {
-    const msg = await safeText(res);
-    throw new Error(msg || "Failed to accept invite");
-  }
-  const data = (await res.json()) as { leagueId: string };
-  return data.leagueId;
-}
-
-async function declineInviteSilently(token: string) {
-  try {
-    await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/invites/decline`,
-      {
+  async function acceptInvite() {
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/invites/accept", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
-        cache: "no-store",
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || data?.error) {
+        setError(data?.error || "Failed to accept invite.");
+        setBusy(false);
+        return;
       }
-    );
-  } catch {
-    // no-op
+      setOkMsg("Invite accepted! Taking you to your dashboard…");
+      // Small delay so the message flashes, then go
+      setTimeout(() => router.push("/dashboard"), 600);
+    } catch (e: any) {
+      setError(e?.message || "Unexpected error.");
+      setBusy(false);
+    }
   }
-}
 
-async function safeText(res: Response) {
-  try {
-    return await res.text();
-  } catch {
-    return "";
+  function decline() {
+    router.push("/dashboard");
   }
-}
 
-/* ------------------------- UI components ------------------------- */
-
-function SignedOutLanding({ nextUrl }: { nextUrl: string }) {
   return (
-    <div className="container mx-auto max-w-xl p-8 space-y-6">
-      <h1 className="text-3xl font-semibold">You’re invited! 🎉</h1>
-      <p className="text-gray-300">
-        You’ve been invited to join a league. Sign in or create an account, and
-        we’ll bring you right back to review and respond.
-      </p>
-
-      <div className="space-y-3">
-        <Link
-          className="inline-block rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
-          href={`/login?next=${encodeURIComponent(nextUrl)}`}
-        >
-          Sign in
-        </Link>
-        <div className="text-sm text-gray-400">
-          New here?{" "}
-          <Link className="underline" href={`/signup?next=${encodeURIComponent(nextUrl)}`}>
-            Create an account
-          </Link>
-        </div>
+    <div className="container mx-auto max-w-2xl p-6">
+      <div className="flex gap-3 mb-8">
+        <Link href="/" className="px-4 py-2 rounded-full border">Home</Link>
+        <Link href="/login" className="px-4 py-2 rounded-full border">Login (soon)</Link>
+        <Link href="/dashboard" className="px-4 py-2 rounded-full border">Dashboard (soon)</Link>
       </div>
 
-      {/* Optional email conveniences that also bounce back here */}
-      <MagicBlock nextUrl={nextUrl} />
-    </div>
-  );
-}
+      <h1 className="text-4xl font-bold mb-6">League invite</h1>
 
-function SignedInReview({
-  token,
-  meta,
-}: {
-  token: string;
-  meta: { leagueName?: string; inviterEmail?: string };
-}) {
-  return (
-    <div className="container mx-auto max-w-xl p-8 space-y-6">
-      <h1 className="text-3xl font-semibold">League invite</h1>
-
-      <div className="rounded border border-gray-700 p-4">
-        <div className="text-sm text-gray-400">League</div>
-        <div className="text-lg">{meta.leagueName || "League"}</div>
-        {meta.inviterEmail && (
-          <div className="mt-2 text-sm text-gray-400">
-            Invited by {meta.inviterEmail}
-          </div>
-        )}
+      <div className="rounded-2xl border p-5 bg-black/20 mb-6">
+        <div className="text-sm text-neutral-400 mb-1">Invite token</div>
+        <div className="font-mono text-neutral-200 break-all">{token}</div>
       </div>
 
-      <p className="text-sm text-gray-300">
-        Review the details and choose an option below.
-      </p>
+      <p className="mb-6">Review the details and choose an option below.</p>
 
-      <div className="flex items-center gap-3">
-        <Link
-          href={`/invite/${encodeURIComponent(token)}?do=accept`}
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
+      <div className="flex gap-3">
+        <button
+          onClick={acceptInvite}
+          disabled={busy}
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-5 py-2 rounded-lg"
         >
-          Accept invite
-        </Link>
-        <Link
-          href={`/invite/${encodeURIComponent(token)}?do=decline`}
-          className="rounded border border-gray-600 px-4 py-2 hover:bg-gray-900"
+          {busy ? "Accepting…" : "Accept invite"}
+        </button>
+        <button
+          onClick={decline}
+          disabled={busy}
+          className="border border-neutral-600 hover:bg-neutral-800 px-5 py-2 rounded-lg"
         >
           Decline
-        </Link>
+        </button>
       </div>
 
-      <div className="text-sm text-gray-500">
-        Changed your mind? Head back to your{" "}
-        <Link className="underline" href="/dashboard">
-          dashboard
-        </Link>
-        .
-      </div>
+      {error && (
+        <div className="mt-6 text-red-400">
+          <div className="font-semibold">Error</div>
+          <div className="text-sm">{error}</div>
+        </div>
+      )}
+
+      {okMsg && (
+        <div className="mt-6 text-green-400">
+          <div className="font-semibold">Success</div>
+          <div className="text-sm">{okMsg}</div>
+        </div>
+      )}
     </div>
-  );
-}
-
-/**
- * A tiny client-side magic-link + 6-digit code block that returns to `nextUrl`.
- * After auth completes, user lands back on the invite page to Accept/Decline.
- */
-function MagicBlock({ nextUrl }: { nextUrl: string }) {
-  return (
-    <script
-      type="module"
-      // eslint-disable-next-line react/no-danger
-      dangerouslySetInnerHTML={{
-        __html: `
-import { createClient } from "@supabase/supabase-js";
-
-const root = document.currentScript.parentElement || document.body;
-const html = \`
-  <div class="space-y-2">
-    <h2 class="font-semibold mt-6">Or continue with a magic link</h2>
-    <form id="magicForm" class="space-y-2">
-      <input type="email" required placeholder="your@email.com"
-        class="w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm" />
-      <button type="submit"
-        class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500">Send magic link</button>
-    </form>
-    <details class="mt-2">
-      <summary class="cursor-pointer text-sm underline">I have a 6-digit code</summary>
-      <form id="otpForm" class="mt-2 space-y-2">
-        <input inputmode="numeric" pattern="\\\\d{6}" minlength="6" maxlength="6" required
-          placeholder="123456"
-          class="w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm" />
-        <button type="submit"
-          class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500">Verify code</button>
-      </form>
-    </details>
-  </div>
-\`;
-root.insertAdjacentHTML("beforeend", html);
-
-const sb = createClient("${process.env.NEXT_PUBLIC_SUPABASE_URL}", "${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}");
-
-// Always bounce back here so the user can explicitly accept/decline
-const callback = ${JSON.stringify(
-  (process.env.NEXT_PUBLIC_BASE_URL || "") + "/auth/callback"
-)} + "?next=" + encodeURIComponent(${JSON.stringify(nextUrl)});
-
-const magicForm = root.querySelector("#magicForm");
-const otpForm   = root.querySelector("#otpForm");
-const emailInput = magicForm.querySelector("input[type=email]");
-
-// Magic link flow
-magicForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const email = emailInput.value.trim();
-  if (!email) return;
-  const { error } = await sb.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: callback }
-  });
-  alert(error ? ("Error: " + error.message) : "Check your email for a magic link.");
-});
-
-// 6-digit code flow (email OTP)
-otpForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const email = emailInput.value.trim();
-  const token = otpForm.querySelector("input").value.trim();
-  const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
-  if (error) {
-    alert("Invalid code: " + error.message);
-    return;
-  }
-  window.location.replace(${JSON.stringify(nextUrl)});
-});
-        `,
-      }}
-    />
   );
 }
