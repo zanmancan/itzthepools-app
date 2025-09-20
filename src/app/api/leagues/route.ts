@@ -2,82 +2,71 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
-/**
- * POST /api/leagues
- * body: {
- *   name: string,
- *   ruleset: string,
- *   season: string,
- *   isPublic?: boolean,
- *   maxMembers?: number | null,                 // null/blank => DB default (50)
- *   defaultInviteExpiresDays?: number | null,   // 0 => never; null/blank => DB default (7)
- *   defaultInviteMaxUses?: number | null        // 0 => unlimited; null/blank => DB default (1 or null)
- * }
- */
-export async function POST(req: NextRequest) {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function json(res: NextResponse, body: unknown, status = 200) {
+  return new NextResponse(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+  });
+}
+
+/** GET → leagues for current user */
+export async function GET(req: NextRequest) {
+  const res = NextResponse.next();
   try {
-    const body = (await req.json()) ?? {};
-    const {
-      name,
-      ruleset,
-      season,
-      isPublic = false,
-      maxMembers = null,
-      defaultInviteExpiresDays = null,
-      defaultInviteMaxUses = null,
-    } = body;
-
-    if (!name || !ruleset || !season) {
-      return new NextResponse("Missing fields", { status: 400 });
-    }
-
-    const sb = supabaseRoute();
-    const {
-      data: { user },
-    } = await sb.auth.getUser();
-    if (!user) return new NextResponse("Unauthorized", { status: 401 });
-
-    // Normalize numbers (allow "", null)
-    const normMaxMembers =
-      maxMembers === "" || maxMembers === null || typeof maxMembers === "undefined"
-        ? null
-        : Number(maxMembers);
-
-    const normExpiresDays =
-      defaultInviteExpiresDays === "" ||
-      defaultInviteExpiresDays === null ||
-      typeof defaultInviteExpiresDays === "undefined"
-        ? null
-        : Number(defaultInviteExpiresDays); // 0 is allowed (never expires)
-
-    const normMaxUses =
-      defaultInviteMaxUses === "" ||
-      defaultInviteMaxUses === null ||
-      typeof defaultInviteMaxUses === "undefined"
-        ? null
-        : Number(defaultInviteMaxUses); // 0 is allowed (unlimited)
+    const sb = supabaseRoute(req, res);
+    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    if (uerr) return json(res, { error: uerr.message }, 500);
+    if (!user) return json(res, { error: "Unauthorized" }, 401);
 
     const { data, error } = await sb
+      .from("league_members")
+      .select("role, leagues:league_id ( id, name, season, ruleset, is_public )")
+      .eq("user_id", user.id)
+      .order("role", { ascending: true });
+
+    if (error) return json(res, { error: error.message }, 400);
+    return json(res, { ok: true, rows: data ?? [] });
+  } catch (e: any) {
+    return json(res, { error: e?.message ?? "Server error" }, 500);
+  }
+}
+
+/** POST { name, season?, ruleset?, is_public? } → create league + owner membership */
+export async function POST(req: NextRequest) {
+  const res = NextResponse.next();
+  try {
+    const sb = supabaseRoute(req, res);
+    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    if (uerr) return json(res, { error: uerr.message }, 500);
+    if (!user) return json(res, { error: "Unauthorized" }, 401);
+
+    const body = await req.json().catch(() => ({} as any));
+    const name = (body.name ?? "").trim();
+    const season = (body.season ?? null) as string | null;
+    const ruleset = (body.ruleset ?? null) as string | null;
+    const is_public = Boolean(body.is_public ?? false);
+
+    if (!name) return json(res, { error: "name required" }, 400);
+
+    const { data: league, error: insErr } = await sb
       .from("leagues")
-      .insert({
-        name,
-        ruleset,
-        season,
-        owner_id: user.id,
-        is_public: !!isPublic,
-        // When null, DB default from your SQL migration will apply
-        max_members: Number.isFinite(normMaxMembers) ? normMaxMembers : null,
-        default_invite_expires_days: Number.isFinite(normExpiresDays) ? normExpiresDays : null,
-        default_invite_max_uses: Number.isFinite(normMaxUses) ? normMaxUses : null,
-      })
-      .select(
-        "id, name, ruleset, season, is_public, max_members, default_invite_expires_days, default_invite_max_uses"
-      )
+      .insert({ name, season, ruleset, is_public })
+      .select("id, name, season, ruleset, is_public")
       .single();
 
-    if (error) return new NextResponse(error.message, { status: 400 });
-    return NextResponse.json({ league: data });
+    if (insErr) return json(res, { error: insErr.message }, 400);
+
+    const { error: memErr } = await sb
+      .from("league_members")
+      .insert({ league_id: league.id, user_id: user.id, role: "owner" });
+
+    if (memErr) return json(res, { error: `membership failed: ${memErr.message}` }, 400);
+
+    return json(res, { ok: true, league });
   } catch (e: any) {
-    return new NextResponse(e?.message ?? "Server error", { status: 500 });
+    return json(res, { error: e?.message ?? "Server error" }, 500);
   }
 }

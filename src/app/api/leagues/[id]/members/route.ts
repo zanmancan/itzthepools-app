@@ -1,32 +1,47 @@
+// src/app/api/leagues/[id]/members/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
-// GET /api/leagues/:id/members  -> owner_list_members
-export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
-  const sb = supabaseRoute();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-  const { data, error } = await sb.rpc("owner_list_members", { p_league: params.id });
-  if (error) return new NextResponse(error.message, { status: 400 });
+type Params = { params: { id: string } };
 
-  return NextResponse.json(data ?? []);
+function json(res: NextResponse, body: unknown, status = 200) {
+  return new NextResponse(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+  });
 }
 
-// DELETE /api/leagues/:id/members  (body: { userId })
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { userId } = await req.json();
-  if (!userId) return new NextResponse("Missing userId", { status: 400 });
+/** GET → list members for a league (visible to any member) */
+export async function GET(req: NextRequest, { params }: Params) {
+  const res = NextResponse.next();
+  try {
+    const league_id = params.id;
+    const sb = supabaseRoute(req, res);
+    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    if (uerr) return json(res, { error: uerr.message }, 500);
+    if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-  const sb = supabaseRoute();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+    // Must be a member to view members
+    const { data: me } = await sb
+      .from("league_members")
+      .select("role")
+      .eq("league_id", league_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!me) return json(res, { error: "Forbidden" }, 403);
 
-  const { error } = await sb.rpc("owner_remove_member", {
-    p_league: params.id,
-    p_user: userId,
-  });
-  if (error) return new NextResponse(error.message, { status: 400 });
+    const { data, error } = await sb
+      .from("league_members")
+      .select("user_id, role, profiles: user_id ( id, email, display_name )")
+      .eq("league_id", league_id)
+      .order("role", { ascending: true });
 
-  return NextResponse.json({ ok: true });
+    if (error) return json(res, { error: error.message }, 400);
+    return json(res, { ok: true, members: data ?? [] });
+  } catch (e: any) {
+    return json(res, { error: e?.message ?? "Server error" }, 500);
+  }
 }

@@ -1,39 +1,55 @@
 // src/app/api/invites/accept/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
-export async function POST(req: Request) {
-  const { token } = await req.json().catch(() => ({} as { token?: string }));
-  if (!token || typeof token !== "string") {
-    return NextResponse.json(
-      { status: "error", message: "Missing token" },
-      { status: 400 }
-    );
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/** POST { token } -> accept invite (no team name change) */
+export async function POST(req: NextRequest) {
+  const res = NextResponse.next();
+  try {
+    const sb = supabaseRoute(req, res);
+
+    const { token } = await req.json().catch(() => ({} as any));
+    if (!token) {
+      return new NextResponse(JSON.stringify({ error: "Missing token" }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
     }
 
-  const sb = supabaseRoute();
+    const { data: { user }, error: userErr } = await sb.auth.getUser();
+    if (userErr) {
+      return new NextResponse(JSON.stringify({ error: userErr.message }), {
+        status: 500,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+    if (!user) {
+      return new NextResponse(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
 
-  // Minimal, safe default: find the invite and delete it (adjust to your real flow).
-  const { data: invite, error } = await sb
-    .from("invites")
-    .select("id")
-    .eq("token", token)
-    .single();
+    const { data, error } = await sb.rpc("accept_invite", { p_token: token });
+    if (error) {
+      return new NextResponse(JSON.stringify({ error: error.message }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
 
-  if (error || !invite) {
-    return NextResponse.json(
-      { status: "error", message: "Invite not found" },
-      { status: 404 }
-    );
+    const leagueId = data as string;
+    return new NextResponse(JSON.stringify({ ok: true, leagueId }), {
+      status: 200,
+      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    });
+  } catch (e: any) {
+    return new NextResponse(JSON.stringify({ error: e?.message ?? "Server error" }), {
+      status: 500,
+      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    });
   }
-
-  const { error: delErr } = await sb.from("invites").delete().eq("id", invite.id);
-  if (delErr) {
-    return NextResponse.json(
-      { status: "error", message: delErr.message },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ status: "ok" });
 }

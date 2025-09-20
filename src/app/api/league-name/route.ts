@@ -1,40 +1,48 @@
+// src/app/api/league-name/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
-/**
- * GET /api/league-name?name=Zandy%20Family%20Pool&scope=global|perRuleset&ruleset=march_madness&season=2026
- * Returns: { available: boolean }
- *
- * - scope=global  -> name must be unique across all leagues
- * - scope=perRuleset -> name must be unique for (ruleset + season) only
- */
-export async function GET(req: NextRequest) {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type Body = { league_id?: string; name?: string };
+
+function json(res: NextResponse, body: unknown, status = 200) {
+  return new NextResponse(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const res = NextResponse.next();
   try {
-    const url = new URL(req.url);
-    const name = (url.searchParams.get("name") || "").trim();
-    const scope = (url.searchParams.get("scope") || "global").toLowerCase();
-    const ruleset = (url.searchParams.get("ruleset") || "").trim();
-    const season = (url.searchParams.get("season") || "").trim();
+    const { league_id, name } = (await req.json().catch(() => ({}))) as Body;
+    if (!league_id || !name) return json(res, { error: "league_id and name required" }, 400);
 
-    if (!name) return NextResponse.json({ available: false });
+    const sb = supabaseRoute(req, res);
 
-    const sb = supabaseRoute();
-    let query = sb.from("leagues").select("id", { count: "exact", head: true }).ilike("name", name);
+    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    if (uerr) return json(res, { error: uerr.message }, 500);
+    if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-    // global uniqueness: any league with same name (case-insensitive)
-    if (scope === "global") {
-      // no extra filters
-    } else if (scope === "perruleset") {
-      // unique within the same ruleset+season
-      if (!ruleset || !season) return NextResponse.json({ available: false });
-      query = query.eq("ruleset", ruleset).eq("season", season);
+    // must be owner/admin
+    const { data: lm } = await sb
+      .from("league_members")
+      .select("role")
+      .eq("league_id", league_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!lm || !["owner", "admin"].includes(lm.role as any)) {
+      return json(res, { error: "Forbidden" }, 403);
     }
 
-    const { count, error } = await query;
-    if (error) return NextResponse.json({ available: false });
+    const { error } = await sb.from("leagues").update({ name }).eq("id", league_id);
+    if (error) return json(res, { error: error.message }, 400);
 
-    return NextResponse.json({ available: (count ?? 0) === 0 });
-  } catch {
-    return NextResponse.json({ available: false });
+    return json(res, { ok: true });
+  } catch (e: any) {
+    return json(res, { error: e?.message ?? "Server error" }, 500);
   }
 }

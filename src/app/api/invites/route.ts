@@ -1,86 +1,122 @@
+// src/app/api/invites/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
-/**
- * POST /api/invites
- * body: { leagueId: string, email?: string, note?: string, expiresAt?: string | null }
- * returns: { id: string, joinUrl: string }
- */
-export async function POST(req: NextRequest) {
-  try {
-    const { leagueId, email, note, expiresAt } = await req.json();
-    if (!leagueId) return new NextResponse("Missing leagueId", { status: 400 });
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-    const sb = supabaseRoute();
-    const {
-      data: { user },
-    } = await sb.auth.getUser();
-    if (!user) return new NextResponse("Unauthorized", { status: 401 });
+type PostBody = { league_id?: string; email?: string };
 
-    // Owner check
-    const { data: ownerRow, error: ownErr } = await sb
-      .from("leagues")
-      .select("id, signup_deadline")
-      .eq("id", leagueId)
-      .eq("owner_id", user.id)
-      .single();
-    if (ownErr || !ownerRow) return new NextResponse("Not owner", { status: 403 });
-
-    // Use explicit expiresAt, else default to league signup_deadline (if set), else null
-    const expAt =
-      typeof expiresAt === "string"
-        ? new Date(expiresAt).toISOString()
-        : ownerRow.signup_deadline ?? null;
-
-    const { data: invite, error } = await sb
-      .from("invites")
-      .insert({ league_id: leagueId, email: email ?? null, note: note ?? null, expires_at: expAt })
-      .select("id, token")
-      .single();
-
-    if (error) return new NextResponse(error.message, { status: 400 });
-
-    const url = new URL(req.url);
-    const joinUrl = `${url.origin}/join/${invite.token}`;
-
-    // Optional: send email via Resend if configured and email provided
-    if (email && process.env.RESEND_API_KEY && process.env.INVITES_FROM_EMAIL) {
-      try {
-        const r = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          },
-          body: JSON.stringify({
-            from: process.env.INVITES_FROM_EMAIL,
-            to: email,
-            subject: "You’re invited to join a league on Itz The Pools",
-            html: `
-              <p>You’ve been invited to join a league.</p>
-              ${note ? `<p><em>Note from the owner:</em> ${escapeHtml(note)}</p>` : ""}
-              <p><a href="${joinUrl}">Click here to accept the invite</a></p>
-            `,
-          }),
-        });
-        // Ignore non-200 here; the invite still exists
-        await r.text();
-      } catch {
-        // swallow — UI already has the copyable link
-      }
-    }
-
-    return NextResponse.json({ id: invite.id, joinUrl });
-  } catch (e: any) {
-    return new NextResponse(e?.message ?? "Server error", { status: 500 });
-  }
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function escapeHtml(s: string) {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+export async function POST(req: NextRequest) {
+  const res = NextResponse.next(); // we’ll copy its headers into the final JSON
+  try {
+    const sb = supabaseRoute(req, res);
+
+    // auth
+    const { data: { user }, error: userErr } = await sb.auth.getUser();
+    if (userErr) {
+      return new NextResponse(
+        JSON.stringify({ error: `auth error: ${userErr.message}` }),
+        { status: 500, headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) } }
+      );
+    }
+    if (!user) {
+      return new NextResponse(JSON.stringify({ error: "unauthenticated" }), {
+        status: 401,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+
+    // body
+    const body = (await req.json().catch(() => ({}))) as PostBody;
+    const league_id = body.league_id?.trim();
+    const email = (body.email ?? "").trim().toLowerCase();
+    if (!league_id || !email) {
+      return new NextResponse(JSON.stringify({ error: "league_id and email required" }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+    if (!isValidEmail(email)) {
+      return new NextResponse(JSON.stringify({ error: "invalid email" }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+
+    // must be owner/admin of this league
+    const { data: membership, error: memErr } = await sb
+      .from("league_members")
+      .select("role")
+      .eq("league_id", league_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (memErr) {
+      return new NextResponse(JSON.stringify({ error: `membership lookup failed: ${memErr.message}` }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+    if (!membership || !["owner", "admin"].includes(membership.role as any)) {
+      return new NextResponse(JSON.stringify({ error: "only league owner/admin can invite" }), {
+        status: 403,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+
+    // optional: block duplicate pending invite
+    const { data: existingRow, error: exErr } = await sb
+      .from("invites")
+      .select("id, accepted")
+      .eq("league_id", league_id)
+      .eq("email", email)
+      .order("created_at", { ascending: false })
+      .maybeSingle();
+
+    if (exErr) {
+      return new NextResponse(JSON.stringify({ error: `invite check failed: ${exErr.message}` }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+    if (existingRow && existingRow.accepted === false) {
+      return new NextResponse(JSON.stringify({ error: "pending invite already exists for this email" }), {
+        status: 409,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+
+    // create token
+    const token = randomUUID();
+    const { error: insErr } = await sb.from("invites").insert({
+      league_id,
+      email,
+      invited_by: user.id,
+      token,
+      accepted: false,
+    });
+    if (insErr) {
+      return new NextResponse(JSON.stringify({ error: `insert failed: ${insErr.message}` }), {
+        status: 400,
+        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+      });
+    }
+
+    const acceptUrl = `/invite/${token}`;
+    return new NextResponse(JSON.stringify({ ok: true, token, acceptUrl }), {
+      status: 200,
+      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    });
+  } catch (e: any) {
+    return new NextResponse(JSON.stringify({ error: e?.message ?? "unknown error" }), {
+      status: 500,
+      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    });
+  }
 }
