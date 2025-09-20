@@ -1,1 +1,4 @@
-npx --no-install lint-staged
+#!/usr/bin/env sh
+# Minimal shim that works in GitHub Desktop on Windows (sh is available via Git).
+# Call a Node script so we don't depend on bash features.
+node .husky/pre-commit.cjs

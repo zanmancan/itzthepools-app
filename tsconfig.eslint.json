@@ -18,12 +18,5 @@
     // Next types generated during build
     ".next/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules",
-    ".next",
-    "dist",
-    "build",
-    "coverage",
-    "playwright-report"
-  ]
+  "exclude": ["node_modules", ".next", "dist", "build", "coverage", "playwright-report"]
 }

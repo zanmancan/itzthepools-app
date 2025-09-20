@@ -19,5 +19,10 @@
     "http",
     "net"
   ],
-  "typescript.tsdk": "node_modules\\typescript\\lib"
+  "typescript.tsdk": "node_modules\\typescript\\lib",
+
+  /* Make VS Code parse Husky hooks as shell scripts */
+  "files.associations": {
+    ".husky/*": "shellscript"
+  }
 }

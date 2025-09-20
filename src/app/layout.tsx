@@ -1,10 +1,9 @@
 // src/app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
-import { supabaseServer } from "@/lib/supabaseServer";
 import Nav from "@/components/Nav";
 import ToastProvider from "@/components/Toast";
-import AuthSync from "@/components/AuthSync"; // keeps Supabase cookies in sync client↔server
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export const metadata: Metadata = {
   title: "Itz The Pools",
@@ -16,18 +15,20 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Server-side check for an authenticated user (safe to call in a layout)
-  const sb = supabaseServer();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
+  // Soft, defensive auth check — NEVER throw here.
+  let isAuthed = false;
+  try {
+    const sb = supabaseServer();
+    const { data, error } = await sb.auth.getUser();
+    if (!error && data?.user) isAuthed = true;
+  } catch {
+    // swallow — we never want layout to crash production
+    isAuthed = false;
+  }
 
   return (
     <html lang="en">
       <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
-        {/* Client hook that syncs Supabase auth events to HttpOnly cookies */}
-        <AuthSync />
-
         {/* Skip link for a11y */}
         <a
           href="#app-main"
@@ -36,11 +37,8 @@ export default async function RootLayout({
           Skip to content
         </a>
 
-        {/* Site chrome */}
         <div className="container">
-          <Nav isAuthed={!!user} />
-
-          {/* Main app content */}
+          <Nav isAuthed={isAuthed} />
           <main id="app-main" role="main" className="mt-6" data-testid="app-main">
             <ToastProvider>{children}</ToastProvider>
           </main>

@@ -1,45 +1,47 @@
 // src/lib/supabaseServer.ts
-// SSR helpers using @supabase/ssr, with legacy-compatible exports.
+// Safe server-side Supabase clients.
+//
+// - supabaseServer(): for Server Components / layouts (read cookies only; never mutates)
+// - supabaseServerMutable(): for Server Actions & Route Handlers (can set/remove cookies)
+//
+// For compatibility with older API routes that import `supabaseRoute`,
+// we also export `supabaseRoute` as an alias of `supabaseServerMutable`.
 
 import { cookies } from "next/headers";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { env } from "@/lib/env";
 
-// For Server Components / server actions
+/** For RSC/layouts: do NOT mutate cookies. */
 export function supabaseServer() {
   const jar = cookies();
-
   return createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
     cookies: {
       get(name: string) {
         return jar.get(name)?.value;
       },
-      set(name: string, value: string, options: CookieOptions) {
-        // Use object-style so types line up with Next + @supabase/ssr
-        jar.set({ name, value, ...options });
-      },
-      remove(name: string, options: CookieOptions) {
-        jar.set({ name, value: "", ...options, maxAge: 0 });
-      },
+      set(_name: string, _value: string, _options?: CookieOptions) {},
+      remove(_name: string, _options?: CookieOptions) {},
     },
   });
 }
 
-// For Route Handlers (/app/api/**) – compatibility export
-export function supabaseRoute() {
+/** For Server Actions & Route Handlers: cookie mutation allowed. */
+export function supabaseServerMutable() {
   const jar = cookies();
-
   return createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
     cookies: {
       get(name: string) {
         return jar.get(name)?.value;
       },
-      set(name: string, value: string, options: CookieOptions) {
-        jar.set({ name, value, ...options });
+      set(name: string, value: string, options?: CookieOptions) {
+        jar.set(name, value, options);
       },
-      remove(name: string, options: CookieOptions) {
-        jar.set({ name, value: "", ...options, maxAge: 0 });
+      remove(name: string, options?: CookieOptions) {
+        jar.set(name, "", { ...options, maxAge: 0 });
       },
     },
   });
 }
+
+/** Back-compat alias for existing API routes. */
+export const supabaseRoute = supabaseServerMutable;
