@@ -1,92 +1,111 @@
-// src/app/auth/callback/page.tsx
-import { redirect } from "next/navigation";
+"use client";
+
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 export const dynamic = "force-dynamic";
 
-type Props = {
-  searchParams: Record<string, string | string[] | undefined>;
-};
+export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={<WaitScreen message="Please wait…" />}>
+      <CallbackInner />
+    </Suspense>
+  );
+}
 
-export default async function AuthCallbackPage({ searchParams }: Props) {
-  const next = (typeof searchParams.next === "string" && searchParams.next) || "/dashboard";
-  const sb = supabaseServer();
+function CallbackInner() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const sb = supabaseBrowser();
 
-  // Surface any error sent back in the URL
-  const urlError =
-    (typeof searchParams.error_description === "string" && searchParams.error_description) ||
-    (typeof searchParams.error === "string" && searchParams.error) ||
-    null;
+  const next = sp.get("next") || "/dashboard";
 
-  if (urlError) {
+  // Supabase email link params (non-PKCE)
+  const token_hash = sp.get("token_hash");
+  const rawType = sp.get("type");
+
+  // Supabase PKCE param (OAuth or “magic link” using pkce)
+  const code = sp.get("code");
+
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // 1) PKCE / OAuth flow — ?code=...
+        if (code) {
+          const { error } = await sb.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          if (!cancelled) router.replace(next);
+          return;
+        }
+
+        // 2) Email link flow — ?token_hash=...&type=signup|magiclink|recovery|email_change
+        const otpType = isEmailOtpType(rawType) ? rawType : null;
+        if (token_hash && otpType) {
+          const { error } = await sb.auth.verifyOtp({ token_hash, type: otpType });
+          if (error) throw error;
+          if (!cancelled) router.replace(next);
+          return;
+        }
+
+        // 3) Already signed in? just continue
+        const { data: sessionData } = await sb.auth.getSession();
+        if (sessionData.session) {
+          if (!cancelled) router.replace(next);
+          return;
+        }
+
+        // 4) Fallback: nothing recognized — go to login
+        if (!cancelled) router.replace(`/login?next=${encodeURIComponent(next)}`);
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message ?? "Authentication error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, token_hash, rawType, next]);
+
+  if (error) {
     return (
       <div className="container mx-auto max-w-xl p-8 space-y-4">
-        <h1 className="text-2xl font-semibold">Invite error</h1>
-        <p className="text-red-400">{urlError}</p>
-        <Link className="underline" href="/dashboard">Continue</Link>
+        <h1 className="text-2xl font-semibold">Auth error</h1>
+        <p className="text-red-400 text-sm">{error}</p>
+        <Link className="underline" href="/dashboard">
+          Continue
+        </Link>
       </div>
     );
   }
 
-  // Understand both auth shapes
-  const code = typeof searchParams.code === "string" ? searchParams.code : null;
-  const token_hash =
-    typeof searchParams.token_hash === "string" ? searchParams.token_hash : null;
-  const otpType = typeof searchParams.type === "string" ? searchParams.type : null;
+  return <WaitScreen message="Please wait…" />;
+}
 
-  // Already signed in and no auth params? Go on.
-  const { data: me } = await sb.auth.getUser();
-  if (me.user && !code && !token_hash) {
-    redirect(next);
-  }
+/** Only allow verifyOtp types that Supabase accepts. */
+function isEmailOtpType(
+  v: string | null
+): v is "signup" | "magiclink" | "recovery" | "email_change" {
+  return v === "signup" || v === "magiclink" || v === "recovery" || v === "email_change";
+}
 
-  // ---- PKCE flow (expects string code for your SDK version) ----
-  if (code) {
-    const { data, error } = await sb.auth.exchangeCodeForSession(code);
-    if (error) {
-      return (
-        <div className="container mx-auto max-w-xl p-8 space-y-4">
-          <h1 className="text-2xl font-semibold">Auth error</h1>
-          <p className="text-red-400">{error.message}</p>
-          <Link className="underline" href="/dashboard">Continue</Link>
-        </div>
-      );
-    }
-    if (data?.session) redirect(next);
-  }
-
-  // ---- OTP / magic-link flow (email links) ----
-  if (token_hash && otpType) {
-    const { data, error } = await sb.auth.verifyOtp({
-      type: otpType as "signup" | "magiclink" | "recovery" | "invite",
-      token_hash,
-    });
-
-    if (error) {
-      return (
-        <div className="container mx-auto max-w-xl p-8 space-y-4">
-          <h1 className="text-2xl font-semibold">Auth error</h1>
-          <p className="text-red-400">{error.message}</p>
-          <Link className="underline" href="/dashboard">Continue</Link>
-        </div>
-      );
-    }
-
-    if (data?.session) {
-      // cookies set by supabaseServer helper
-      redirect(next);
-    }
-  }
-
-  // Fallback / loading
+function WaitScreen({ message }: { message: string }) {
   return (
-    <div className="container mx-auto max-w-xl p-8 space-y-4">
-      <h1 className="text-2xl font-semibold">Please wait…</h1>
+    <div className="container mx-auto max-w-xl p-8 space-y-3">
+      <h1 className="text-2xl font-semibold">{message}</h1>
       <p className="text-gray-400 text-sm">
-        Finishing sign-in. If this takes more than a few seconds, go back to your invite and try again.
+        Finishing sign-in. If this takes more than a few seconds, return to your invite and try
+        again.
       </p>
-      <Link className="underline" href="/dashboard">Continue</Link>
+      <Link className="underline text-sm" href="/dashboard">
+        Continue
+      </Link>
     </div>
   );
 }
