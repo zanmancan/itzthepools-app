@@ -9,21 +9,17 @@ type Body = { token?: string | null; teamName?: string | null };
 
 function normalizeTeamName(n?: string | null) {
   const v = (n ?? "").trim();
-  if (!v) return { ok: false as const, error: "teamName is required." };
-  if (v.length < 2) return { ok: false as const, error: "teamName must be at least 2 characters." };
-  if (v.length > 30) return { ok: false as const, error: "teamName must be 30 characters or fewer." };
-  if (!/^[A-Za-z0-9 _-]+$/.test(v))
-    return {
-      ok: false as const,
-      error: "teamName may contain letters, numbers, spaces, dashes, underscores.",
-    };
+  if (!v) return { ok: false as const, value: null as null };
+  if (v.length < 2) return { ok: false as const, value: null as null };
+  if (v.length > 30) return { ok: false as const, value: null as null };
+  if (!/^[A-Za-z0-9 _-]+$/.test(v)) return { ok: false as const, value: null as null };
   return { ok: true as const, value: v };
 }
 
 export async function POST(req: NextRequest) {
   const { client, response } = supabaseServer(req);
 
-  // 1) Parse token + teamName
+  // 1) Parse token (+ optional teamName)
   let token = "";
   let teamNameIn: string | null | undefined = undefined;
   try {
@@ -31,45 +27,61 @@ export async function POST(req: NextRequest) {
     token = typeof body?.token === "string" ? body.token.trim() : "";
     teamNameIn = typeof body?.teamName === "string" ? body.teamName : undefined;
   } catch {
-    /* ignore; may be in query */
+    /* ignore */
   }
   if (!token) {
     const q = new URL(req.url).searchParams.get("token");
     if (q) token = q.trim();
   }
-
-  const teamCheck = normalizeTeamName(teamNameIn ?? null);
   if (!token) return jsonWithRes(response, { error: "token is required" }, 400);
-  if (!teamCheck.ok) return jsonWithRes(response, { error: teamCheck.error }, 400);
-  const teamName = teamCheck.value;
 
-  // 2) Must be signed in
-  const {
-    data: { user },
-    error: userErr,
-  } = await client.auth.getUser();
+  // 2) Auth
+  const { data: { user }, error: userErr } = await client.auth.getUser();
   if (userErr || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
 
-  // 3) Ensure profile.team_name is set (UPSERT by id)
-  //    RLS must allow: INSERT/UPDATE where id = auth.uid()
-  const profilePayload = { id: user.id, team_name: teamName };
-  const { error: profileErr } = await client
-    .from("profiles")
-    .upsert([profilePayload], { onConflict: "id" });
+  // 3) Team name: use provided one OR existing one on profile — otherwise block
+  let teamName: string | null = null;
+  const norm = normalizeTeamName(teamNameIn ?? null);
+  if (norm.ok && norm.value) {
+    teamName = norm.value;
+    // upsert onto profile
+    const { error: profileErr } = await client
+      .from("profiles")
+      .upsert([{ id: user.id, team_name: teamName }], { onConflict: "id" });
+    if (profileErr) {
+      return jsonWithRes(
+        response,
+        { error: "Failed to set team name on profile.", code: profileErr.code, detail: profileErr.message },
+        500
+      );
+    }
+  } else {
+    // load current profile name
+    const { data: p, error: profErr } = await client
+      .from("profiles")
+      .select("team_name")
+      .eq("id", user.id)
+      .maybeSingle();
 
-  if (profileErr) {
-    return jsonWithRes(
-      response,
-      {
-        error: "Failed to set team name on profile.",
-        code: profileErr.code,
-        detail: profileErr.message,
-      },
-      500
-    );
+    if (profErr) {
+      return jsonWithRes(
+        response,
+        { error: "Failed to load profile.", code: profErr.code, detail: profErr.message },
+        500
+      );
+    }
+    teamName = (p?.team_name ?? "").trim() || null;
+
+    if (!teamName) {
+      return jsonWithRes(
+        response,
+        { error: "Failed to create membership.", detail: "User must set a Team Name in profile before joining a league." },
+        500
+      );
+    }
   }
 
-  // 4) Accept invite with a single UPDATE ... RETURNING
+  // 4) Accept invite with single UPDATE ... RETURNING
   const { data: inv, error: updErr } = await client
     .from("invites")
     .update({ accepted: true })
@@ -86,25 +98,17 @@ export async function POST(req: NextRequest) {
     );
   }
   if (!inv) {
-    return jsonWithRes(
-      response,
-      { error: "Invite not found, already used, or not accessible." },
-      404
-    );
+    return jsonWithRes(response, { error: "Invite not found, already used, or not accessible." }, 404);
   }
 
-  // 5) If the invite was email-locked, enforce match
+  // 5) Enforce email-locked invite
   const inviteEmail = String(inv.email ?? "").toLowerCase();
   const userEmail = String(user.email ?? "").toLowerCase();
   if (inviteEmail && inviteEmail !== userEmail) {
-    return jsonWithRes(
-      response,
-      { error: "This invite is not for your email address." },
-      403
-    );
+    return jsonWithRes(response, { error: "This invite is not for your email address." }, 403);
   }
 
-  // 6) Idempotent membership: check first, insert if missing
+  // 6) Idempotent membership
   const { data: existing, error: existErr } = await client
     .from("league_members")
     .select("user_id")
@@ -121,22 +125,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (!existing) {
-    const payload = {
-      league_id: String(inv.league_id),
-      user_id: user.id,
-      role: "member" as const,
-    };
+    const payload = { league_id: String(inv.league_id), user_id: user.id, role: "member" as const };
     const { error: insErr } = await client.from("league_members").insert([payload]);
 
-    if (insErr) {
-      const isDuplicate = insErr.code === "23505"; // race-safe
-      if (!isDuplicate) {
-        return jsonWithRes(
-          response,
-          { error: "Failed to create membership.", code: insErr.code, detail: insErr.message },
-          500
-        );
-      }
+    if (insErr && insErr.code !== "23505") {
+      return jsonWithRes(
+        response,
+        { error: "Failed to create membership.", code: insErr.code, detail: insErr.message },
+        500
+      );
     }
   }
 
