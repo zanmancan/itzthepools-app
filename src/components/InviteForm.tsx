@@ -1,3 +1,4 @@
+// src/components/InviteForm.tsx
 "use client";
 
 import { useState } from "react";
@@ -23,22 +24,44 @@ export default function InviteForm({ leagueId }: Props) {
         cache: "no-store",
       });
 
-      const json = await res.json();
+      // Read as text first; try JSON, fallback to plain text
+      const raw = await res.text();
+      let json: any = {};
+      try {
+        json = raw ? JSON.parse(raw) : {};
+      } catch {
+        json = { errorText: raw };
+      }
+
       if (!res.ok) {
-        setError(json.error || "Unknown error creating invite");
+        // Prefer server error message if present
+        const msg =
+          json?.error ||
+          json?.message ||
+          json?.errorText ||
+          `HTTP ${res.status} ${res.statusText || ""}`.trim();
+        setError(msg);
         return;
       }
 
-      setAcceptUrl(json.acceptUrl);
+      // Prefer acceptUrl from API; fallback to token
+      const url = json?.acceptUrl || (json?.token ? `/invite/${json.token}` : null);
+      if (!url) {
+        setError("Invite created but no URL was returned.");
+        return;
+      }
+
+      setAcceptUrl(url);
       setEmail("");
     } catch (err: any) {
+      console.error("invite create failed:", err);
       setError(err?.message ?? "Network error");
     } finally {
       setBusy(false);
     }
   }
 
-  // Wrap async calls so handlers return void
+  // Wrap async so React handlers return void (avoids eslint warnings)
   function onCreate(e: React.FormEvent) {
     e.preventDefault();
     void doCreate();
@@ -81,7 +104,11 @@ export default function InviteForm({ leagueId }: Props) {
       {acceptUrl && (
         <div className="rounded border border-gray-700 p-3">
           <div className="text-xs text-gray-400">Invite link</div>
-          <div className="break-all text-sm">{acceptUrl}</div>
+          <div className="break-all text-sm">
+            {typeof window === "undefined"
+              ? acceptUrl
+              : new URL(acceptUrl, window.location.origin).toString()}
+          </div>
           <div className="mt-2 flex gap-2">
             <a
               className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600"
