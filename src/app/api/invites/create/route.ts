@@ -1,6 +1,5 @@
 // src/app/api/invites/create/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -12,6 +11,7 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+// Helper to always include Set-Cookie headers from `res`
 function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
@@ -20,9 +20,21 @@ function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
 }
 
 export async function POST(req: NextRequest) {
-  const res = NextResponse.next(); // collect Set-Cookie from supabaseRoute
+  // Create a response up-front so any refreshed cookies land on it
+  const res = NextResponse.next();
+
   try {
-    const sb = supabaseRoute(req, res);
+    // 👇 Wrap construction so if supabaseRoute throws, we still return JSON
+    let sb;
+    try {
+      sb = supabaseRoute(req, res);
+    } catch (e: any) {
+      return jsonWithRes(
+        res,
+        { error: `supabase client init failed: ${e?.message || String(e)}` },
+        500
+      );
+    }
 
     // auth
     const { data: { user }, error: userErr } = await sb.auth.getUser();
@@ -63,8 +75,9 @@ export async function POST(req: NextRequest) {
       return jsonWithRes(res, { error: "pending invite already exists for this email" }, 409);
     }
 
-    // create invite
-    const token = randomUUID();
+    // ✅ Use Web Crypto so it works in any runtime
+    const token = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)) as string;
+
     const { error: insErr } = await sb.from("invites").insert({
       league_id,
       email,
@@ -74,11 +87,10 @@ export async function POST(req: NextRequest) {
     });
     if (insErr) return jsonWithRes(res, { error: `insert failed: ${insErr.message}` }, 400);
 
-    // return the new-style path
     const acceptUrl = `/invite/${token}`;
     return jsonWithRes(res, { ok: true, token, acceptUrl }, 200);
   } catch (e: any) {
-    // Surface a helpful error to the client
+    // Final safety net — you’ll now see the real message in the UI, not just “HTTP 500”
     return jsonWithRes(res, { error: e?.message ?? "unknown server error" }, 500);
   }
 }
