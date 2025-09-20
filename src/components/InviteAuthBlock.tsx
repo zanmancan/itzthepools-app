@@ -25,6 +25,7 @@ export default function InviteAuthBlock({ token }: Props) {
   const [showCode, setShowCode] = useState(false);
   const [code, setCode] = useState("");
 
+  /** Sends passwordless magic link to the email, and also allows OTP code path */
   async function sendMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -35,7 +36,10 @@ export default function InviteAuthBlock({ token }: Props) {
         email,
         options: { emailRedirectTo: redirectTo },
       });
-      if (error) { setErr(error.message); return; }
+      if (error) {
+        setErr(error.message);
+        return;
+      }
       setSent(true);
     } catch (e: any) {
       setErr(e?.message ?? "Something went wrong");
@@ -44,6 +48,7 @@ export default function InviteAuthBlock({ token }: Props) {
     }
   }
 
+  /** Verifies a 6-digit OTP code from the email without following the link */
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -54,8 +59,11 @@ export default function InviteAuthBlock({ token }: Props) {
         token: code,
         type: "email",
       });
-      if (error) { setErr(error.message); return; }
-      // Auth complete in this tab; reload to let the server accept the invite
+      if (error) {
+        setErr(error.message);
+        return;
+      }
+      // Auth complete in this tab; reload so the server page accepts the invite.
       window.location.href = nextUrl;
     } catch (e: any) {
       setErr(e?.message ?? "Invalid or expired code");
@@ -66,7 +74,14 @@ export default function InviteAuthBlock({ token }: Props) {
 
   return (
     <div className="space-y-4">
-      <form onSubmit={sendMagicLink} className="space-y-3">
+      {/* Wrap async with a non-async handler to satisfy no-misused-promises */}
+      <form
+        onSubmit={(e) => {
+          // eslint-disable-next-line @typescript-eslint/no-floating-promises
+          sendMagicLink(e);
+        }}
+        className="space-y-3"
+      >
         <label className="block text-sm text-gray-300">Continue with your email</label>
         <input
           type="email"
@@ -105,7 +120,13 @@ export default function InviteAuthBlock({ token }: Props) {
             I have a 6-digit code
           </button>
         ) : (
-          <form onSubmit={verifyCode} className="space-y-2">
+          <form
+            onSubmit={(e) => {
+              // eslint-disable-next-line @typescript-eslint/no-floating-promises
+              verifyCode(e);
+            }}
+            className="space-y-2"
+          >
             <div className="flex gap-2">
               <input
                 type="text"
