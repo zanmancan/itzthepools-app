@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
@@ -25,18 +25,28 @@ function SignupInner() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const origin = useMemo(() => {
+    if (typeof window !== "undefined") return window.location.origin;
+    return process.env.NEXT_PUBLIC_SITE_URL || "";
+  }, []);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      const { error } = await sb.auth.signUp({ email, password });
+      const { error } = await sb.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+        },
+      });
       if (error) {
         setError(error.message);
         return;
       }
-      // If email confirmation is enabled, user may need to verify.
-      // Still move them forward; they'll come back signed in.
+      // Move them forward. After confirming email they'll come back signed in.
       router.replace(next);
     } catch (e: any) {
       setError(e?.message ?? "Sign up failed");
@@ -52,7 +62,6 @@ function SignupInner() {
         You’ll be returned to continue joining the league.
       </p>
 
-      {/* Wrap async to satisfy no-misused-promises */}
       <form
         onSubmit={(e) => {
           // eslint-disable-next-line @typescript-eslint/no-floating-promises

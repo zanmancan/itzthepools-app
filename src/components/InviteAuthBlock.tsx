@@ -25,13 +25,15 @@ export default function InviteAuthBlock({ token }: Props) {
   const [showCode, setShowCode] = useState(false);
   const [code, setCode] = useState("");
 
-  /** Sends passwordless magic link to the email, and also allows OTP code path */
   async function sendMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
     setBusy(true);
     try {
-      const redirectTo = (process.env.NEXT_PUBLIC_SITE_URL || siteOrigin || "") + nextUrl;
+      const redirectTo =
+        (process.env.NEXT_PUBLIC_SITE_URL || siteOrigin || "") +
+        `/auth/callback?next=${encodeURIComponent(nextUrl)}`;
+
       const { error } = await sb.auth.signInWithOtp({
         email,
         options: { emailRedirectTo: redirectTo },
@@ -48,22 +50,16 @@ export default function InviteAuthBlock({ token }: Props) {
     }
   }
 
-  /** Verifies a 6-digit OTP code from the email without following the link */
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
     setBusy(true);
     try {
-      const { error } = await sb.auth.verifyOtp({
-        email,
-        token: code,
-        type: "email",
-      });
+      const { error } = await sb.auth.verifyOtp({ email, token: code, type: "email" });
       if (error) {
         setErr(error.message);
         return;
       }
-      // Auth complete in this tab; reload so the server page accepts the invite.
       window.location.href = nextUrl;
     } catch (e: any) {
       setErr(e?.message ?? "Invalid or expired code");
@@ -74,7 +70,6 @@ export default function InviteAuthBlock({ token }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* Wrap async with a non-async handler to satisfy no-misused-promises */}
       <form
         onSubmit={(e) => {
           // eslint-disable-next-line @typescript-eslint/no-floating-promises
@@ -109,7 +104,6 @@ export default function InviteAuthBlock({ token }: Props) {
         {err && <div className="text-sm text-red-400">{err}</div>}
       </form>
 
-      {/* Optional: enter 6-digit code instead of tapping the email link */}
       <div className="space-y-2">
         {!showCode ? (
           <button
@@ -152,7 +146,6 @@ export default function InviteAuthBlock({ token }: Props) {
         )}
       </div>
 
-      {/* Alternate paths for power users */}
       <div className="text-sm text-gray-400">
         Prefer passwords? <a className="underline" href={signinHref}>Use password instead</a>
         {" · "}
