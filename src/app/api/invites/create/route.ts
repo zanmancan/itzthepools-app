@@ -14,7 +14,7 @@ function isValidEmail(email: string) {
 export async function POST(req: NextRequest) {
   const { client, response, url } = supabaseServer(req);
 
-  // Parse body
+  // 1) Parse & validate
   let body: PostBody;
   try {
     body = await req.json();
@@ -37,14 +37,14 @@ export async function POST(req: NextRequest) {
     if (!isValidEmail(email)) return jsonWithRes(response, { error: "email is invalid." }, 400);
   }
 
-  // Require auth
+  // 2) Require auth
   const {
     data: { user },
     error: authError,
   } = await client.auth.getUser();
   if (authError || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
 
-  // Optional: pre-check ownership so we can return 403 instead of generic 500 from RLS
+  // 3) Owner-only check (your schema has leagues.owner_id)
   const { data: league, error: leagueErr } = await client
     .from("leagues")
     .select("id, owner_id")
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     return jsonWithRes(response, { error: "Forbidden (owner only)." }, 403);
   }
 
-  // Insert invite — your schema uses invited_by; "public" means email is NULL
+  // 4) Insert invite — "public" means email is NULL in your schema
   const token = crypto.randomUUID().replace(/-/g, "");
   const payload = {
     league_id,
@@ -91,6 +91,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 5) Build the link and return ALL common keys so the UI can't miss it
   const inviteUrl = absoluteUrl(url, `/invite/${invite.token}`);
-  return jsonWithRes(response, { id: invite.id, url: inviteUrl }, 200);
+
+  return jsonWithRes(
+    response,
+    {
+      id: invite.id,
+      url: inviteUrl,           // <— primary
+      acceptUrl: inviteUrl,     // <— some UIs expect this
+      link: inviteUrl,          // <— some UIs expect this
+      token,                    // handy for debug
+    },
+    200
+  );
 }
