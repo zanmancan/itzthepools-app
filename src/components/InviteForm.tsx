@@ -1,4 +1,3 @@
-// src/components/InviteForm.tsx
 "use client";
 
 import { useState } from "react";
@@ -11,8 +10,7 @@ export default function InviteForm({ leagueId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [acceptUrl, setAcceptUrl] = useState<string | null>(null);
 
-  async function onCreate(e: React.FormEvent) {
-    e.preventDefault();
+  async function doCreate() {
     setBusy(true);
     setError(null);
     setAcceptUrl(null);
@@ -31,7 +29,6 @@ export default function InviteForm({ leagueId }: Props) {
         return;
       }
 
-      // API returns { ok, token, acceptUrl }
       setAcceptUrl(json.acceptUrl);
       setEmail("");
     } catch (err: any) {
@@ -41,7 +38,13 @@ export default function InviteForm({ leagueId }: Props) {
     }
   }
 
-  async function copyLink() {
+  // Wrap async calls so handlers return void
+  function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    void doCreate();
+  }
+
+  async function doCopyLink() {
     if (!acceptUrl) return;
     try {
       const absolute = new URL(acceptUrl, window.location.origin).toString();
@@ -80,12 +83,16 @@ export default function InviteForm({ leagueId }: Props) {
           <div className="text-xs text-gray-400">Invite link</div>
           <div className="break-all text-sm">{acceptUrl}</div>
           <div className="mt-2 flex gap-2">
-            <a className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600" href={acceptUrl} target="_blank">
+            <a
+              className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600"
+              href={acceptUrl}
+              target="_blank"
+            >
               Open
             </a>
             <button
               type="button"
-              onClick={copyLink}
+              onClick={() => void doCopyLink()}
               className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600"
             >
               Copy link

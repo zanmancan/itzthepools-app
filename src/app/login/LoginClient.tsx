@@ -16,19 +16,22 @@ export default function LoginClient() {
   const [err, setErr] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function doLogin() {
     setErr(null);
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) {
       setErr(error.message);
       return;
     }
-    // Important: with @supabase/ssr browser client, cookies are set.
-    // Give middleware a tick to see the fresh cookie, then navigate.
     startTransition(() => {
       router.replace(next);
     });
+  }
+
+  // NOTE: wrap the async call so the handler itself returns void
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void doLogin();
   }
 
   return (
