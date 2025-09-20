@@ -1,4 +1,3 @@
-// src/components/InviteForm.tsx
 "use client";
 
 import { useState } from "react";
@@ -7,6 +6,7 @@ type Props = { leagueId: string };
 
 export default function InviteForm({ leagueId }: Props) {
   const [email, setEmail] = useState("");
+  const [isPublic, setIsPublic] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acceptUrl, setAcceptUrl] = useState<string | null>(null);
@@ -20,31 +20,21 @@ export default function InviteForm({ leagueId }: Props) {
       const res = await fetch("/api/invites/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ league_id: leagueId, email }),
+        body: JSON.stringify({ league_id: leagueId, email: isPublic ? null : email || null, isPublic }),
         cache: "no-store",
       });
 
-      // Read as text first; try JSON, fallback to plain text
       const raw = await res.text();
       let json: any = {};
-      try {
-        json = raw ? JSON.parse(raw) : {};
-      } catch {
-        json = { errorText: raw };
-      }
+      try { json = raw ? JSON.parse(raw) : {}; } catch { json = { errorText: raw }; }
 
       if (!res.ok) {
-        // Prefer server error message if present
         const msg =
-          json?.error ||
-          json?.message ||
-          json?.errorText ||
-          `HTTP ${res.status} ${res.statusText || ""}`.trim();
+          json?.error || json?.message || json?.errorText || `HTTP ${res.status} ${res.statusText || ""}`.trim();
         setError(msg);
         return;
       }
 
-      // Prefer acceptUrl from API; fallback to token
       const url = json?.acceptUrl || (json?.token ? `/invite/${json.token}` : null);
       if (!url) {
         setError("Invite created but no URL was returned.");
@@ -52,7 +42,7 @@ export default function InviteForm({ leagueId }: Props) {
       }
 
       setAcceptUrl(url);
-      setEmail("");
+      if (!isPublic) setEmail("");
     } catch (err: any) {
       console.error("invite create failed:", err);
       setError(err?.message ?? "Network error");
@@ -61,7 +51,6 @@ export default function InviteForm({ leagueId }: Props) {
     }
   }
 
-  // Wrap async so React handlers return void (avoids eslint warnings)
   function onCreate(e: React.FormEvent) {
     e.preventDefault();
     void doCreate();
@@ -80,15 +69,15 @@ export default function InviteForm({ leagueId }: Props) {
 
   return (
     <form onSubmit={onCreate} className="space-y-3">
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <input
           type="email"
-          required
           placeholder="invitee@email.com"
-          className="flex-1 rounded border border-gray-700 bg-black px-3 py-2 text-sm"
+          className="flex-1 rounded border border-gray-700 bg-black px-3 py-2 text-sm disabled:opacity-50"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          disabled={busy}
+          disabled={busy || isPublic}
+          required={!isPublic}
         />
         <button
           type="submit"
@@ -98,6 +87,17 @@ export default function InviteForm({ leagueId }: Props) {
           {busy ? "Creating…" : "Create invite"}
         </button>
       </div>
+
+      <label className="flex items-center gap-2 text-sm text-gray-300">
+        <input
+          type="checkbox"
+          className="accent-blue-600"
+          checked={isPublic}
+          onChange={(e) => setIsPublic(e.target.checked)}
+          disabled={busy}
+        />
+        Make this a public link (no email required)
+      </label>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
