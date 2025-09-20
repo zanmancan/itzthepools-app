@@ -8,10 +8,14 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: { id: string } };
 
+/** JSON helper that preserves Set-Cookie headers from `res`. */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
@@ -21,12 +25,23 @@ function validEmail(e: string) {
 
 /** GET → list invites for league (owner/admin see all; others see their own) */
 export async function GET(req: NextRequest, { params }: Params) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
+  try {
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
   try {
     const league_id = params.id;
-    const sb = supabaseRoute(req, res);
 
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
@@ -56,16 +71,33 @@ export async function GET(req: NextRequest, { params }: Params) {
 
 /** POST { email } → create invite (owner/admin only) */
 export async function POST(req: NextRequest, { params }: Params) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
+  try {
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
   try {
     const league_id = params.id;
-    const { email } = (await req.json().catch(() => ({}))) as { email?: string };
+
+    let email: string | undefined;
+    try {
+      const body = (await req.json()) as { email?: string };
+      email = body.email?.trim();
+    } catch {
+      /* ignored; validated below */
+    }
 
     if (!email || !validEmail(email)) return json(res, { error: "valid email required" }, 400);
 
-    const sb = supabaseRoute(req, res);
-
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 

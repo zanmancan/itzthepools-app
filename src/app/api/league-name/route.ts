@@ -7,26 +7,54 @@ export const dynamic = "force-dynamic";
 
 type Body = { league_id?: string; name?: string };
 
+/** Return JSON while preserving Set-Cookie headers carried on `res`. */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
 export async function POST(req: NextRequest) {
-  const res = NextResponse.next();
+  // Initialize cookie-bound Supabase client and a response shell
+  let sb, res: NextResponse;
   try {
-    const { league_id, name } = (await req.json().catch(() => ({}))) as Body;
-    if (!league_id || !name) return json(res, { error: "league_id and name required" }, 400);
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
 
-    const sb = supabaseRoute(req, res);
+  try {
+    // Parse body safely
+    let league_id: string | undefined;
+    let name: string | undefined;
+    try {
+      const body = (await req.json()) as Body;
+      league_id = body.league_id?.trim();
+      name = body.name?.trim();
+    } catch {
+      // ignored; handled by validation below
+    }
 
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    if (!league_id || !name) {
+      return json(res, { error: "league_id and name required" }, 400);
+    }
+
+    // Auth
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-    // must be owner/admin
+    // Must be owner/admin
     const { data: lm } = await sb
       .from("league_members")
       .select("role")
@@ -38,6 +66,7 @@ export async function POST(req: NextRequest) {
       return json(res, { error: "Forbidden" }, 403);
     }
 
+    // Update league name
     const { error } = await sb.from("leagues").update({ name }).eq("id", league_id);
     if (error) return json(res, { error: error.message }, 400);
 

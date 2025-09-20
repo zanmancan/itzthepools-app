@@ -1,5 +1,5 @@
 // src/app/api/invites/accept-with-name/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -8,29 +8,61 @@ export const dynamic = "force-dynamic";
 /** POST { token, teamName } -> accept + set team name (atomic) */
 export async function POST(req: NextRequest) {
   try {
-    const { token, teamName } = await req.json().catch(() => ({} as any));
+    // Parse body safely
+    let token: string | undefined;
+    let teamName: string | undefined;
+    try {
+      const body = (await req.json()) as { token?: string; teamName?: string };
+      token = body?.token;
+      teamName = body?.teamName;
+    } catch {
+      // ignore – handled below
+    }
     if (!token || !teamName) {
       return NextResponse.json({ error: "Missing token or teamName" }, { status: 400 });
     }
 
-    // Create a response up-front and pass it to supabaseRoute so any refreshed
-    // auth cookies are written onto *this* response that we return.
-    const res = NextResponse.json({ ok: true });
-    const sb = supabaseRoute(req, res);
+    // Cookie-bound Supabase client + a response shell that carries Set-Cookie
+    const { client: sb, response } = supabaseRoute(req);
 
-    const { data: { user }, error: userErr } = await sb.auth.getUser();
-    if (userErr) return NextResponse.json({ error: userErr.message }, { status: 500 });
-    if (!user)   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Require an authenticated user
+    const {
+      data: { user },
+      error: userErr,
+    } = await sb.auth.getUser();
 
+    if (userErr) {
+      return NextResponse.json(
+        { error: userErr.message ?? "Auth error" },
+        { status: 500, headers: response.headers }
+      );
+    }
+    if (!user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: response.headers }
+      );
+    }
+
+    // Call RPC that accepts invite and sets team name atomically
     const { error } = await sb.rpc("accept_invite_with_name", {
       p_token: token,
       p_team_name: teamName,
     });
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-    // Return the same `res` so any Set-Cookie headers are preserved.
-    return res;
+    if (error) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400, headers: response.headers }
+      );
+    }
+
+    // Success – include the helper's headers so any auth cookie writes persist
+    return NextResponse.json({ ok: true }, { headers: response.headers });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "Server error" },
+      { status: 500 }
+    );
   }
 }

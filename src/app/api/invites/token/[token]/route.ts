@@ -7,18 +7,29 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: { token: string } };
 
+/** JSON helper that keeps any headers (incl. Set-Cookie) written on `res`. */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
 export async function GET(req: NextRequest, { params }: Params) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
   try {
-    const sb = supabaseRoute(req, res);
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
 
+  try {
     const { data, error } = await sb
       .from("invites")
       .select("id, league_id, email, invited_by, token, accepted, created_at")
@@ -26,7 +37,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       .maybeSingle();
 
     if (error) return json(res, { error: error.message }, 400);
-    if (!data) return json(res, { error: "Invite not found" }, 404);
+    if (!data)  return json(res, { error: "Invite not found" }, 404);
 
     return json(res, { ok: true, invite: data });
   } catch (e: any) {

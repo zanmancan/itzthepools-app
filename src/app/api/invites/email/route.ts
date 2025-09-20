@@ -12,55 +12,61 @@ function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://localhost:3001";
 }
 
+/** Ensure we forward any Set-Cookie headers returned by supabaseRoute */
+function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
+  return new NextResponse(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
-  const res = NextResponse.next();
+  // Initialize cookie-bound supabase client and a response shell
+  let sb: ReturnType<typeof supabaseRoute>["client"];
+  let res: NextResponse;
+  try {
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
   try {
     const { leagueId, email, expiresAt } = (await req.json().catch(() => ({}))) as Body;
     if (!leagueId || !email) {
-      return new NextResponse(JSON.stringify({ error: "leagueId and email required" }), {
-        status: 400,
-        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-      });
+      return jsonWithRes(res, { error: "leagueId and email required" }, 400);
     }
 
-    const sb = supabaseRoute(req, res);
+    // Auth
+    const {
+      data: { user },
+      error: userErr,
+    } = await sb.auth.getUser();
+    if (userErr) return jsonWithRes(res, { error: userErr.message }, 500);
+    if (!user) return jsonWithRes(res, { error: "Unauthorized" }, 401);
 
-    const { data: { user }, error: userErr } = await sb.auth.getUser();
-    if (userErr) {
-      return new NextResponse(JSON.stringify({ error: userErr.message }), {
-        status: 500,
-        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-      });
-    }
-    if (!user) {
-      return new NextResponse(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-      });
-    }
-
-    // Check owner/admin
+    // Owner/admin check
     const { data: membership, error: memErr } = await sb
       .from("league_members")
       .select("role")
       .eq("league_id", leagueId)
       .eq("user_id", user.id)
       .maybeSingle();
+
     if (memErr) {
-      return new NextResponse(JSON.stringify({ error: `membership lookup failed: ${memErr.message}` }), {
-        status: 400,
-        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-      });
+      return jsonWithRes(res, { error: `membership lookup failed: ${memErr.message}` }, 400);
     }
     if (!membership || !["owner", "admin"].includes(membership.role as any)) {
-      return new NextResponse(JSON.stringify({ error: "only league owner/admin can invite" }), {
-        status: 403,
-        headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-      });
+      return jsonWithRes(res, { error: "only league owner/admin can invite" }, 403);
     }
 
-    // Prefer your RPC if it exists:
-    let token: string | null = null;
+    // Prefer your RPC if it exists (returns a token), else fallback to raw insert
+    let token: string;
 
     const tryRpc = await sb.rpc("create_email_invite", {
       p_league_id: leagueId,
@@ -69,9 +75,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!tryRpc.error && tryRpc.data) {
-      token = String(tryRpc.data); // RPC returns token
+      token = String(tryRpc.data);
     } else {
-      // Fallback: insert into invites table (no expiry handling here)
       token = randomUUID();
       const { error: insErr } = await sb.from("invites").insert({
         league_id: leagueId,
@@ -81,22 +86,13 @@ export async function POST(req: NextRequest) {
         accepted: false,
       });
       if (insErr) {
-        return new NextResponse(JSON.stringify({ error: `insert failed: ${insErr.message}` }), {
-          status: 400,
-          headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-        });
-      }
+        return jsonWithRes(res, { error: `insert failed: ${insErr.message}` }, 400);
+    }
     }
 
     const joinUrl = `${siteUrl()}/invite/${token}`;
-    return new NextResponse(JSON.stringify({ ok: true, token, joinUrl }), {
-      status: 200,
-      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-    });
+    return jsonWithRes(res, { ok: true, token, joinUrl }, 200);
   } catch (e: any) {
-    return new NextResponse(JSON.stringify({ error: e?.message ?? "Server error" }), {
-      status: 500,
-      headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
-    });
+    return jsonWithRes(res, { error: e?.message ?? "Server error" }, 500);
   }
 }

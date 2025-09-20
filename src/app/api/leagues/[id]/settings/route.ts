@@ -6,17 +6,35 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Params = { params: { id: string } };
-type Body = { name?: string; season?: string | null; ruleset?: string | null; is_public?: boolean };
+type Body = {
+  name?: string;
+  season?: string | null;
+  ruleset?: string | null;
+  is_public?: boolean;
+};
 
+/** JSON helper that preserves Set-Cookie headers from the Supabase response */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
+  try {
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
   try {
     const league_id = params.id;
     const body = (await req.json().catch(() => ({}))) as Body;
@@ -29,12 +47,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
     if (!Object.keys(payload).length) return json(res, { error: "No fields to update" }, 400);
 
-    const sb = supabaseRoute(req, res);
-
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    // auth
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
+    // owner/admin check
     const { data: lm } = await sb
       .from("league_members")
       .select("role")

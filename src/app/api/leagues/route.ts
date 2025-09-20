@@ -5,19 +5,34 @@ import { supabaseRoute } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Helper that preserves Set-Cookie headers coming from the Supabase client */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
 /** GET → leagues for current user */
 export async function GET(req: NextRequest) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
   try {
-    const sb = supabaseRoute(req, res);
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
@@ -36,14 +51,31 @@ export async function GET(req: NextRequest) {
 
 /** POST { name, season?, ruleset?, is_public? } → create league + owner membership */
 export async function POST(req: NextRequest) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
   try {
-    const sb = supabaseRoute(req, res);
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-    const body = await req.json().catch(() => ({} as any));
+    const body = (await req.json().catch(() => ({} as any))) as {
+      name?: string;
+      season?: string | null;
+      ruleset?: string | null;
+      is_public?: boolean;
+    };
+
     const name = (body.name ?? "").trim();
     const season = (body.season ?? null) as string | null;
     const ruleset = (body.ruleset ?? null) as string | null;

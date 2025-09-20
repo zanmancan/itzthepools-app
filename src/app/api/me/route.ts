@@ -8,19 +8,37 @@ export const dynamic = "force-dynamic";
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...Object.fromEntries(res.headers) },
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
   });
 }
 
 export async function GET(req: NextRequest) {
-  const res = NextResponse.next();
+  let sb, res: NextResponse;
   try {
-    const sb = supabaseRoute(req, res);
-    const { data: { user }, error: uerr } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { ok: true, user: null });
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `supabase client init failed: ${e?.message || String(e)}` },
+      { status: 500 }
+    );
+  }
 
-    // profiles table may differ; adjust columns as needed
+  try {
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
+    if (uerr) return json(res, { error: uerr.message }, 500);
+
+    if (!user) {
+      // Not signed in — still return the same response object to preserve headers
+      return json(res, { ok: true, user: null });
+    }
+
+    // Adjust columns to match your profiles schema
     const { data: profile } = await sb
       .from("profiles")
       .select("id, email, display_name, avatar_url")
