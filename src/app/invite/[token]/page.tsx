@@ -1,43 +1,43 @@
 // src/app/invite/[token]/page.tsx
-// Server component: accepts an invite using the token and redirects or shows a clear error.
-
 import { redirect } from "next/navigation";
-import { acceptInviteByToken, getAuthedUser } from "@/lib/data/leagues";
+import { supabaseServer } from "@/lib/supabaseServer";
 
-type Props = { params: { token: string } };
+export const dynamic = "force-dynamic";
 
-export default async function AcceptInvitePage({ params }: Props) {
-  // Ensure they are signed in – invite acceptance relies on auth.jwt() + auth.uid()
-  const { user } = await getAuthedUser();
-  if (!user) {
-    // If unauthenticated, bounce to login and come back after
-    redirect(`/login?next=/invite/${encodeURIComponent(params.token)}`);
-  }
+export default async function AcceptInvitePage(props: { params: { token: string } }) {
+  const token = props.params.token;
+  const sb = supabaseServer();
 
-  // Try to accept; on success we get a leagueId back
-  const { leagueId, error } = await acceptInviteByToken(params.token);
-
-  if (!error && leagueId) {
-    // Happy path: go to the league page (or dashboard by default)
-    redirect(`/league/${leagueId}`);
-  }
-
-  // If we reach here, something failed – render a friendly error
-  return (
-    <div className="container py-10">
-      <div className="card max-w-lg space-y-4">
-        <div className="h1">Invite error</div>
-        <p className="opacity-80">
-          We couldn’t accept that invite. It may be invalid, already used, or
-          not addressed to your email.
-        </p>
-        <pre className="text-sm bg-neutral-900/60 rounded p-3 overflow-x-auto">
-          {error?.message ?? "Unknown error"}
-        </pre>
-        <a className="btn" href="/dashboard">
-          Go to dashboard
-        </a>
+  // Require auth; if missing, bounce to login then come back
+  const { data: { user }, error: userErr } = await sb.auth.getUser();
+  if (userErr) {
+    return (
+      <div className="container mx-auto max-w-xl p-6">
+        <h1 className="text-2xl font-semibold mb-2">Invite error</h1>
+        <p className="text-red-500">Auth error: {userErr.message}</p>
+        <a className="underline" href="/login">Go to login</a>
       </div>
-    </div>
-  );
+    );
+  }
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(`/invite/${token}`)}`);
+  }
+
+  // Accept via RPC
+  const { data, error } = await sb.rpc("accept_invite", { p_token: token });
+
+  if (error) {
+    return (
+      <div className="container mx-auto max-w-xl p-6">
+        <h1 className="text-2xl font-semibold mb-2">Invite error</h1>
+        <p className="text-red-500">{error.message}</p>
+        <div className="mt-4">
+          <a className="px-4 py-2 rounded bg-gray-700 text-white" href="/dashboard">Back to dashboard</a>
+        </div>
+      </div>
+    );
+  }
+
+  const leagueId = data as string;
+  redirect(`/league/${leagueId}`);
 }

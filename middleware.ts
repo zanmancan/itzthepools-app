@@ -1,48 +1,51 @@
-// middleware.ts
-import { NextResponse, type NextRequest } from "next/server";
+// src/middleware.ts
+// Ensures Supabase auth cookies get refreshed on navigation.
+// Also (optionally) protects /dashboard and /league/*.
+import { NextRequest, NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 
-/**
- * Only protect these app routes.
- * Leave /api/*, static assets, and public pages (login, invite, etc.) alone.
- */
-const PROTECTED: RegExp[] = [
-  /^\/dashboard(?:\/.*)?$/,         // /dashboard and anything under it
-  /^\/league(?:\/.*)?$/,            // /league and anything under it
-];
+export async function middleware(req: NextRequest) {
+  const res = NextResponse.next();
 
-export function middleware(req: NextRequest) {
-  const path = req.nextUrl.pathname;
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return req.cookies.get(name)?.value;
+        },
+        set(name: string, value: string, options: any) {
+          res.cookies.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          res.cookies.set({ name, value: "", ...options });
+        },
+      },
+    }
+  );
 
-  // Skip if this path isn't protected
-  const needsAuth = PROTECTED.some((re) => re.test(path));
-  if (!needsAuth) return NextResponse.next();
+  // This call will refresh the session if needed and write cookies to `res`.
+  const { data: { user } } = await supabase.auth.getUser();
 
-  // Allow CORS preflight without auth
-  if (req.method === "OPTIONS") return NextResponse.next();
+  // Optional guards: keep them simple (avoid redirect loops).
+  const url = req.nextUrl.pathname;
+  const needsAuth =
+    url.startsWith("/dashboard") ||
+    url.startsWith("/league");
 
-  /**
-   * Supabase sets cookies that start with "sb-" (e.g. sb-access-token/sb-refresh-token).
-   * If none are present, bounce to /login and preserve the intended destination.
-   * The server/layout will double-check the session on the page load.
-   */
-  const hasSbCookie = req.cookies.getAll().some((c) => c.name.startsWith("sb-"));
-  if (!hasSbCookie) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", path || "/dashboard");
-    return NextResponse.redirect(url);
+  if (needsAuth && !user) {
+    const login = new URL("/login", req.url);
+    login.searchParams.set("next", req.nextUrl.pathname + req.nextUrl.search);
+    return NextResponse.redirect(login);
   }
 
-  // Let the request through (SSR will confirm the session)
-  return NextResponse.next();
+  return res;
 }
 
-/**
- * Run middleware on everything except Next internals, image optimizer,
- * static assets, and API routes.
- */
 export const config = {
+  // Run on all app routes that need session refresh; exclude static assets.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|images|assets|api/.*).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)).*)",
   ],
 };
