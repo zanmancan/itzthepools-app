@@ -1,38 +1,43 @@
 // src/app/auth/callback/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
 export async function GET(req: NextRequest) {
-  const { client, response } = supabaseServer(req);
   const url = new URL(req.url);
-  const code = url.searchParams.get("code");
+
   const next = url.searchParams.get("next") || "/dashboard";
-  const errorDesc = url.searchParams.get("error_description");
+  const redirectTo = new URL(next, url.origin);
 
-  // If no code, push back to verify page (shows “check your email / enter code”).
-  if (!code) {
-    const outUrl = new URL(`/verify?next=${encodeURIComponent(next)}`, req.url);
-    if (errorDesc) outUrl.searchParams.set("err", errorDesc);
-    const out = NextResponse.redirect(outUrl);
-    response.cookies.getAll().forEach((c) => out.cookies.set(c));
-    return out;
-  }
+  // Prepare redirect response we can attach cookies to
+  const res = NextResponse.redirect(redirectTo.toString());
 
-  // Exchange the code for a session cookie
-  const { error } = await client.auth.exchangeCodeForSession(code);
+  // Supabase SSR client wired to this response's cookies
+  const client = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return req.cookies.get(name)?.value;
+        },
+        set(name: string, value: string, options: CookieOptions) {
+          res.cookies.set({ name, value, ...options });
+        },
+        remove(name: string, options: CookieOptions) {
+          res.cookies.set({ name, value: "", ...options, expires: new Date(0) });
+        },
+      },
+    }
+  );
+
+  // IMPORTANT: pass a **string** to exchangeCodeForSession
+  const { error } = await client.auth.exchangeCodeForSession(req.url);
+
   if (error) {
-    const outUrl = new URL(`/verify?next=${encodeURIComponent(next)}`, req.url);
-    if (errorDesc) outUrl.searchParams.set("err", errorDesc);
-    const out = NextResponse.redirect(outUrl);
-    response.cookies.getAll().forEach((c) => out.cookies.set(c));
-    return out;
+    // Surface error on the destination if you want to read it
+    redirectTo.searchParams.set("auth_error", error.message);
+    return NextResponse.redirect(redirectTo.toString());
   }
 
-  // Success → go back to where we were headed (e.g., /invite/[token])
-  const out = NextResponse.redirect(new URL(next, req.url));
-  response.cookies.getAll().forEach((c) => out.cookies.set(c));
-  return out;
+  return res;
 }
