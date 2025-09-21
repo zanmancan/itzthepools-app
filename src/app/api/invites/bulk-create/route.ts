@@ -1,252 +1,171 @@
 // src/app/api/invites/bulk-create/route.ts
-// Bulk create private invites (10–50 emails per request).
-// - Owner-only
-// - 30 invites/min rate limit per creator
-// - Schema-flexible (created_by/is_public/expires_at preferred; falls back to invited_by)
-// - Skips duplicates: existing, unaccepted & unexpired invites for the same (league_id, email)
-
 import { NextRequest } from "next/server";
 import { supabaseServer, jsonWithRes, absoluteUrl } from "@/lib/supabaseServer";
+import { devlog, devtime, devtimeEnd, deverror } from "@/lib/devlog";
 import crypto from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type PostBody = {
-  league_id?: string;
-  emails?: string[] | string; // CSV string or array
-  expiresDays?: number;       // default 14 (1..60)
-};
-
 const LIMIT_PER_MIN = 30;
+
+type Body = {
+  league_id?: string;
+  emails?: string[]; // raw list from UI
+};
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
-function isUnknownColumn(err: any) {
-  const msg = String(err?.message || "").toLowerCase();
-  return msg.includes("column") && msg.includes("does not exist");
-}
-function normalizeEmails(input: string[] | string | undefined): string[] {
-  if (!input) return [];
-  const raw = Array.isArray(input)
-    ? input
-    : String(input)
-        .split(/[,\n;]/g)
-        .map((s) => s.trim());
-  const lowered = raw.map((e) => e.toLowerCase()).filter(Boolean);
-  return Array.from(new Set(lowered)); // de-dupe within request
-}
 
 export async function POST(req: NextRequest) {
-  const { client, response, url } = supabaseServer(req);
+  const { client: sb, response: res, url } = supabaseServer(req);
 
-  // 1) Parse JSON
-  let body: PostBody;
+  // 1) Parse body
+  let body: Body | null = null;
   try {
-    body = await req.json();
+    body = (await req.json()) as Body;
   } catch {
-    return jsonWithRes(response, { ok: false, error: "Invalid JSON body." }, 400);
+    return jsonWithRes(res, { ok: false, error: "Invalid JSON body." }, 400);
   }
+  const league_id = (body?.league_id || "").trim();
+  const rawEmails = Array.isArray(body?.emails) ? body!.emails : [];
 
-  const league_id = typeof body.league_id === "string" ? body.league_id.trim() : "";
-  const expiresDays = Number.isFinite(body.expiresDays)
-    ? Math.max(1, Math.min(60, Number(body.expiresDays)))
-    : 14;
+  if (!league_id) return jsonWithRes(res, { ok: false, error: "league_id is required." }, 400);
+  if (rawEmails.length === 0) return jsonWithRes(res, { ok: false, error: "emails are required." }, 400);
 
-  if (!league_id) return jsonWithRes(response, { ok: false, error: "league_id is required." }, 400);
+  // 2) Auth
+  const {
+    data: { user },
+    error: authErr,
+  } = await sb.auth.getUser();
+  if (authErr || !user) return jsonWithRes(res, { ok: false, error: "Not authenticated." }, 401);
 
-  // Emails (private invites only for bulk)
-  const emails = normalizeEmails(body.emails);
-  if (emails.length === 0) {
-    return jsonWithRes(response, { ok: false, error: "emails are required." }, 400);
-  }
-  if (emails.length > 50) {
-    return jsonWithRes(response, { ok: false, error: "Max 50 emails per request." }, 400);
-  }
+  devlog("[invites:bulk-create] request", { league_id, count: rawEmails.length, user: user.id });
 
-  // Validate format
-  const invalidSet = new Set<string>();
-  const validEmails = emails.filter((e) => {
-    const ok = isValidEmail(e);
-    if (!ok) invalidSet.add(e);
-    return ok;
-  });
-
-  // 2) Require auth (extract a non-null userId for TS)
-  const { data: auth, error: authError } = await client.auth.getUser();
-  const userId = auth?.user?.id ?? null;
-  if (authError || !userId) return jsonWithRes(response, { ok: false, error: "Not authenticated." }, 401);
-
-  // 3) Owner-only check
-  const { data: league, error: leagueErr } = await client
+  // 3) Owner check
+  const { data: league, error: leagueErr } = await sb
     .from("leagues")
     .select("id, owner_id")
     .eq("id", league_id)
     .maybeSingle();
-
   if (leagueErr) {
-    return jsonWithRes(
-      response,
-      { ok: false, error: "Failed to verify league ownership.", detail: leagueErr.message },
-      500
-    );
+    deverror("[invites:bulk-create] verify ownership failed", leagueErr);
+    return jsonWithRes(res, { ok: false, error: "Failed to verify league ownership." }, 500);
   }
-  if (!league || league.owner_id !== userId) {
-    return jsonWithRes(response, { ok: false, error: "Forbidden (owner only)." }, 403);
+  if (!league || league.owner_id !== user.id) {
+    return jsonWithRes(res, { ok: false, error: "Forbidden (owner only)." }, 403);
   }
 
-  // 4) Rate-limit: 30/min per creator (count this batch)
-  const since = new Date(Date.now() - 60_000).toISOString();
-  let existingCount = 0;
+  // 4) Normalize + validate emails
+  const cleaned = rawEmails
+    .map((e) => String(e || "").trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueInput = Array.from(new Set(cleaned));
+  const invalid = uniqueInput.filter((e) => !isValidEmail(e));
+  const valid = uniqueInput.filter((e) => isValidEmail(e));
 
-  // Try created_by first
-  let rate = await client
+  // 5) Rate-limit headroom
+  devtime("invites:bulk-create:ratelimit");
+  const { count: recentCount, error: countErr } = await sb
     .from("invites")
     .select("id", { count: "exact", head: true })
-    .eq("created_by", userId)
-    .gte("created_at", since);
-
-  if (rate.error && isUnknownColumn(rate.error)) {
-    // Fallback invited_by
-    rate = await client
-      .from("invites")
-      .select("id", { count: "exact", head: true })
-      .eq("invited_by", userId)
-      .gte("created_at", since);
+    .eq("invited_by", user.id)
+    .gt("created_at", new Date(Date.now() - 60_000).toISOString());
+  devtimeEnd("invites:bulk-create:ratelimit");
+  if (countErr) {
+    deverror("[invites:bulk-create] rate-limit count failed", countErr);
+    return jsonWithRes(res, { ok: false, error: "Rate-limit check failed." }, 500);
   }
-  existingCount = rate.error ? 0 : (rate.count ?? 0);
-
-  if (existingCount + validEmails.length > LIMIT_PER_MIN) {
+  const remaining = Math.max(0, LIMIT_PER_MIN - (recentCount ?? 0));
+  if (valid.length > remaining) {
+    devlog("[invites:bulk-create] rate-limited", { recentCount, remaining, requested: valid.length });
     return jsonWithRes(
-      response,
-      {
-        ok: false,
-        error: `Rate limit exceeded. You can create at most ${LIMIT_PER_MIN} invites/min.`,
-        detail: { createdInLastMinute: existingCount, requested: validEmails.length, limit: LIMIT_PER_MIN },
-      },
+      res,
+      { ok: false, error: `Invite limit reached. You can create ${remaining} more in the next minute.` },
       429
     );
   }
 
-  // 5) Skip duplicates: normalize result shape so TS doesn't choke
-  type DupRow = { id: string; email: string | null; accepted?: boolean | null; expires_at?: string | null };
-
-  let dupData: DupRow[] = [];
-  let dupErr: any = null;
-
-  // Try modern selection (includes expires_at)
-  {
-    const { data, error } = await client
-      .from("invites")
-      .select("id, email, accepted, expires_at")
-      .eq("league_id", league_id)
-      .in("email", validEmails)
-      .limit(1000);
-    if (!error) {
-      dupData = (data as any[]) as DupRow[];
-    } else if (isUnknownColumn(error)) {
-      // Fallback: without expires_at
-      const res2 = await client
-        .from("invites")
-        .select("id, email, accepted")
-        .eq("league_id", league_id)
-        .in("email", validEmails)
-        .limit(1000);
-      dupErr = res2.error;
-      dupData = (res2.data ?? []).map((r: any) => ({ ...r, expires_at: null })) as DupRow[];
-    } else {
-      dupErr = error;
-    }
-  }
-
-  if (dupErr && !isUnknownColumn(dupErr)) {
-    // We couldn't fetch duplicates but it's not a shape issue — continue anyway (best effort)
-  }
-
-  const nowIso = new Date().toISOString();
-  const duplicateEmails = new Set<string>(
-    dupData
-      .filter((r) => {
-        const unaccepted = r.accepted === false || r.accepted == null; // legacy + modern
-        const notExpired = !r.expires_at || r.expires_at > nowIso;
-        return unaccepted && notExpired;
-      })
-      .map((r) => String(r.email || "").toLowerCase())
+  // 6) Avoid duplicates for emails already invited for this league and not yet accepted
+  devtime("invites:bulk-create:load-existing");
+  const { data: existingInvites, error: exErr } = await sb
+    .from("invites")
+    .select("email, accepted")
+    .eq("league_id", league_id)
+    .is("email", null) // don't mix with public invites; we only compare email invites
+    .not("email", "is", null); // (safety: in case the null filter differs across versions)
+  devtimeEnd("invites:bulk-create:load-existing");
+  // Note: Some SB versions dislike double `is/null` combos; safe-guard below:
+  const existingSet = new Set(
+    (existingInvites || [])
+      .filter((i) => !!i.email && !i.accepted)
+      .map((i) => String(i.email).toLowerCase())
   );
 
-  const toCreate = validEmails.filter((e) => !duplicateEmails.has(e));
+  const dedupedToCreate = valid.filter((e) => !existingSet.has(e));
+  const duplicates = valid.filter((e) => existingSet.has(e));
 
-  // 6) Prepare rows (prefer modern columns)
-  const expiresAt = new Date(Date.now() + expiresDays * 24 * 3600 * 1000).toISOString();
-  const rows = toCreate.map((email) => ({
+  // 7) Create tokens + payloads
+  const now = new Date();
+  const payloads = dedupedToCreate.map((e) => ({
     league_id,
-    email,
+    email: e,
     token: crypto.randomUUID().replace(/-/g, ""),
-    is_public: false,
-    created_by: userId,
-    expires_at: expiresAt,
+    invited_by: user.id,
+    created_at: now.toISOString(), // helpful when doing head counts with gt()
   }));
 
-  // 7) Insert (schema-flexible): try modern first; fallback to invited_by
-  async function insertBatch(batch: any[]) {
-    let ins = await client.from("invites").insert(batch).select("id, token, email");
-    if (ins.error && isUnknownColumn(ins.error)) {
-      const alt = batch.map(({ league_id, email, token }: any) => ({
-        league_id,
-        email,
-        token,
-        invited_by: userId,
-      }));
-      ins = await client.from("invites").insert(alt).select("id, token, email");
-    }
-    return ins;
+  // 8) Bulk insert
+  devtime("invites:bulk-create:insert");
+  const { data: ins, error: insErr } = await sb
+    .from("invites")
+    .insert(payloads)
+    .select("id, email, token, created_at");
+  devtimeEnd("invites:bulk-create:insert");
+
+  if (insErr) {
+    deverror("[invites:bulk-create] insert failed", insErr, { size: payloads.length });
+    return jsonWithRes(
+      res,
+      {
+        ok: false,
+        error: "Failed to create invites.",
+        code: insErr.code,
+        details: insErr.details,
+        hint: insErr.hint,
+        message: insErr.message,
+      },
+      500
+    );
   }
 
-  const created: Array<{ email: string; token: string; url: string }> = [];
-  if (rows.length > 0) {
-    const ins = await insertBatch(rows);
-    if (ins.error) {
-      return jsonWithRes(
-        response,
-        {
-          ok: false,
-          error: "Failed to create invites.",
-          code: ins.error.code,
-          details: ins.error.details,
-          hint: ins.error.hint,
-          message: ins.error.message,
-        },
-        500
-      );
-    }
-    for (const r of ins.data ?? []) {
-      created.push({
-        email: String(r.email),
-        token: String(r.token),
-        url: absoluteUrl(url, `/invite/${r.token}`),
-      });
-    }
-  }
+  // 9) Build per-email results
+  const created = (ins || []).map((r) => ({
+    email: String(r.email),
+    token: String(r.token),
+    url: absoluteUrl(url, `/invite/${r.token}`),
+  }));
 
-  // 8) Build per-email results
-  const results = emails.map((raw) => {
-    const e = raw.toLowerCase();
-    if (invalidSet.has(e)) return { email: e, status: "invalid" as const, reason: "invalid_format" as const };
-    if (duplicateEmails.has(e)) return { email: e, status: "duplicate" as const };
+  const results = uniqueInput.map((e) => {
+    if (!isValidEmail(e)) return { email: e, status: "invalid" as const, reason: "invalid_format" as const };
+    const dup = duplicates.includes(e);
+    if (dup) return { email: e, status: "duplicate" as const };
     const found = created.find((c) => c.email === e);
     if (found) return { email: e, status: "created" as const, token: found.token, url: found.url };
-    return { email: e, status: "unknown" as const };
+    return { email: e, status: "unknown" as const }; // guard
   });
 
   const summary = {
-    total: emails.length,
-    valid: validEmails.length,
+    total: uniqueInput.length,
+    valid: valid.length,
     created: created.length,
-    duplicates: duplicateEmails.size,
-    invalid: invalidSet.size,
-    remainingRateLimit: Math.max(0, LIMIT_PER_MIN - existingCount - validEmails.length),
+    duplicates: duplicates.length,
+    invalid: invalid.length,
+    limitRemaining: Math.max(0, remaining - created.length),
   };
 
-  return jsonWithRes(response, { ok: true, summary, results }, 200);
+  devlog("[invites:bulk-create] summary", summary);
+
+  return jsonWithRes(res, { ok: true, summary, results }, 200);
 }
