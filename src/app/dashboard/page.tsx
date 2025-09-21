@@ -2,7 +2,11 @@
 import Link from "next/link";
 import AuthGate from "@/components/AuthGate";
 import InvitesPanel from "@/components/InvitesPanel";
-import { createSbServer } from "@/lib/supabaseServer"; // ← changed import
+import { createSbServer } from "@/lib/supabaseServer";
+
+// Ensure this page reads cookies on every request (no static caching)
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type LeagueRow = {
   id: string;
@@ -21,19 +25,19 @@ async function getLeagues(): Promise<LeagueRow[]> {
   } = await sb.auth.getUser();
   if (uerr || !user) return [];
 
-  const { data, error } = await sb
+  const res: any = await sb
     .from("league_members")
     .select("role, leagues:league_id(id,name,season,ruleset)")
     .eq("user_id", user.id);
 
-  if (error || !Array.isArray(data)) return [];
+  if (res?.error || !Array.isArray(res?.data)) return [];
 
-  const rows: LeagueRow[] = data.map((r: any) => ({
+  const rows: LeagueRow[] = res.data.map((r: any) => ({
     id: r.leagues?.id,
     name: r.leagues?.name,
     season: r.leagues?.season,
     ruleset: r.leagues?.ruleset ?? null,
-    role: String(r.role || "member").toLowerCase() as LeagueRow["role"],
+    role: (String(r.role || "member").toLowerCase() as LeagueRow["role"]),
   }));
   rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   return rows;
@@ -43,7 +47,7 @@ export default async function DashboardPage() {
   const leagues = await getLeagues();
 
   return (
-    <AuthGate>
+    <AuthGate title="Sign in to view your Dashboard" note="We couldn't detect a session yet.">
       <div className="mx-auto w-full max-w-5xl px-4 py-8">
         <header className="mb-6 flex items-center justify-between">
           <h1 className="text-3xl font-semibold">Your Leagues</h1>
@@ -55,6 +59,7 @@ export default async function DashboardPage() {
           </Link>
         </header>
 
+        {/* Single column, stacked full-width cards */}
         <div className="flex flex-col gap-6">
           {leagues.map((lg) => {
             const canManage = lg.role === "owner" || lg.role === "admin";
@@ -75,6 +80,7 @@ export default async function DashboardPage() {
                   </Link>
                 </div>
 
+                {/* Invites (create/list). InvitesPanel is a client component. */}
                 <div className="mt-3">
                   <div className="mb-2 text-sm font-medium text-gray-300">Invites</div>
                   <InvitesPanel leagueId={lg.id} canManage={canManage} />
