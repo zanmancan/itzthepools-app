@@ -4,15 +4,25 @@ import { supabaseServer } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Minimal admin view for recent email events.
- * - Requires auth. You may want to restrict further (e.g., owner, is_admin flag, email domain, etc).
- * - Reads via API to keep server/DB policies in one place.
- */
-export default async function Page() {
+type EventRow = {
+  id: string | number;
+  created_at: string | null;
+  // handle either new or legacy column names
+  event_type?: string | null;
+  type?: string | null;
+  recipient?: string | null;
+  to_email?: string | null;
+  message_id?: string | null;
+  msg_id?: string | null;
+  provider?: string | null;
+  payload?: any;
+  raw?: any;
+};
+
+export default async function EmailEventsAdminPage() {
   const sb = supabaseServer();
 
-  // Require auth
+  // Require auth (you already added a SELECT policy; this keeps UI sane)
   const { data: auth } = await sb.auth.getUser();
   if (!auth?.user) {
     return (
@@ -23,26 +33,30 @@ export default async function Page() {
     );
   }
 
-  // (Optional) Additional gating:
-  // const { data: profile } = await sb.from("profiles").select("is_admin").eq("id", auth.user.id).maybeSingle();
-  // if (!profile?.is_admin) return <main className="p-6">Forbidden</main>;
+  // Pull latest 100 events directly from DB
+  const { data, error } = await sb
+    .from("email_events")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(100);
 
-  // Fetch from our API so we reuse policy logic
-  const resp = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL || ""}/api/admin/email-events?limit=100`, {
-    // Avoid caching – this is a live log
-    cache: "no-store",
-  }).catch(() => null);
+  const events = (data ?? []) as EventRow[];
 
-  const data = await resp?.json().catch(() => null);
-  const events: any[] = data?.events || [];
+  if (error) {
+    return (
+      <main className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-3">Email Events</h1>
+        <p className="text-red-600">Failed to load events.</p>
+        <pre className="mt-3 text-xs bg-black/30 p-3 rounded">{error.message}</pre>
+      </main>
+    );
+  }
 
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Email Events</h1>
-        <p className="text-sm text-gray-500">
-          Recent events from your webhook sink (Resend). Showing latest {events.length}.
-        </p>
+        <p className="text-sm text-gray-500">Recent events from the Resend webhook sink.</p>
       </div>
 
       <div className="overflow-x-auto border rounded">
@@ -59,12 +73,12 @@ export default async function Page() {
           <tbody>
             {events.map((e) => {
               const created = e.created_at ? new Date(e.created_at).toLocaleString() : "—";
-              const type = e.event_type || e.type || "—";
-              const recipient = e.recipient || e.to_email || "—";
-              const msgId = e.message_id || e.msg_id || "—";
-              const provider = e.provider || "resend";
+              const type = e.event_type ?? e.type ?? "—";
+              const recipient = e.recipient ?? e.to_email ?? "—";
+              const msgId = e.message_id ?? e.msg_id ?? "—";
+              const provider = e.provider ?? "resend";
               return (
-                <tr key={e.id} className="border-t">
+                <tr key={String(e.id)} className="border-t">
                   <td className="px-3 py-2">{created}</td>
                   <td className="px-3 py-2">{type}</td>
                   <td className="px-3 py-2">{recipient}</td>
