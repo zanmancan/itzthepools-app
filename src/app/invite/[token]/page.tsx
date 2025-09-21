@@ -1,4 +1,3 @@
-// src/app/invite/[token]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -21,6 +20,7 @@ export default function InvitePage({ params }: Props) {
   const token = params.token;
   const router = useRouter();
   const pathname = usePathname();
+
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
 
@@ -30,12 +30,18 @@ export default function InvitePage({ params }: Props) {
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
   const [teamName, setTeamName] = useState("");
+
+  // NEW: token gate
+  const [tokenStatus, setTokenStatus] = useState<
+    "loading" | "ok" | "revoked" | "expired" | "used" | "invalid" | "error"
+  >("loading");
+
   const teamError = useMemo(
     () => (authed ? validateTeamName(teamName) : null),
     [authed, teamName]
   );
 
-  // Probe auth, cache team name between steps
+  // Probe auth, cache team name
   useEffect(() => {
     (async () => {
       try {
@@ -55,6 +61,38 @@ export default function InvitePage({ params }: Props) {
     })();
   }, [token]);
 
+  // NEW: preflight invite token status
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/invites/token/${encodeURIComponent(token)}`, {
+          cache: "no-store",
+        });
+        const json = await res.json().catch(() => ({}));
+        devlog("[invite] token status", res.status, json);
+
+        if (!mounted) return;
+
+        if (res.ok && json?.ok) {
+          setTokenStatus("ok");
+          return;
+        }
+
+        const r = String(json?.reason || "");
+        if (r === "revoked") return setTokenStatus("revoked");
+        if (r === "expired") return setTokenStatus("expired");
+        if (r === "used")    return setTokenStatus("used");
+
+        // 404 or anything else
+        setTokenStatus("invalid");
+      } catch {
+        if (mounted) setTokenStatus("error");
+      }
+    })();
+    return () => { mounted = false; };
+  }, [token]);
+
   function onTeamChange(v: string) {
     setTeamName(v);
     try { localStorage.setItem(`invite-teamname:${token}`, v); } catch {}
@@ -67,6 +105,12 @@ export default function InvitePage({ params }: Props) {
     setOkMsg(null);
 
     try {
+      if (tokenStatus !== "ok") {
+        setError("This invite is not available.");
+        setBusy(false);
+        return;
+      }
+
       if (!authed) {
         router.push(`/signup?next=${encodeURIComponent(pathname)}`);
         return;
@@ -100,7 +144,6 @@ export default function InvitePage({ params }: Props) {
         return;
       }
 
-      // success → clear cached team name
       try { localStorage.removeItem(`invite-teamname:${token}`); } catch {}
 
       setOkMsg("Invite accepted! Redirecting to your dashboard…");
@@ -110,6 +153,14 @@ export default function InvitePage({ params }: Props) {
       setBusy(false);
     }
   }
+
+  // helper for blocked states
+  const BlockedCard = (title: string, body?: string) => (
+    <div className="mt-6 text-red-400">
+      <div className="font-semibold">{title}</div>
+      {body && <div className="text-sm">{body}</div>}
+    </div>
+  );
 
   return (
     <div className="container mx-auto max-w-2xl p-6">
@@ -126,57 +177,92 @@ export default function InvitePage({ params }: Props) {
         <div className="font-mono text-neutral-200 break-all">{token}</div>
       </div>
 
-      {authed ? (
-        <div className="mb-6">
-          <label className="block text-sm text-neutral-300 mb-2" htmlFor="teamName">
-            Team name <span className="text-red-400">*</span>
-          </label>
-          <input
-            id="teamName"
-            value={teamName}
-            onChange={(e) => onTeamChange(e.target.value)}
-            placeholder="e.g., Dunk Lords"
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 outline-none focus:border-blue-500"
-            autoComplete="off"
-            maxLength={30}
-          />
-          <div className="mt-1 flex items-center justify-between text-xs text-neutral-400">
-            <span>{teamName.trim().length}/30</span>
-            {teamError && <span className="text-red-400">{teamError}</span>}
+      {/* Blocked reasons */}
+      {tokenStatus !== "ok" && tokenStatus !== "loading" && (
+        <>
+          {tokenStatus === "revoked" && BlockedCard("Invite was revoked", "Ask the league owner for a new link.")}
+          {tokenStatus === "expired" && BlockedCard("Invite expired", "Ask the league owner to send a fresh invite.")}
+          {tokenStatus === "used"    && BlockedCard("Invite already used", "The link was consumed or you’re already in.")}
+          {tokenStatus === "invalid" && BlockedCard("Invalid invite", "This link is not valid.")}
+          {tokenStatus === "error"   && BlockedCard("Could not verify this invite", "Please try again.")}
+          <div className="mt-4">
+            <Link href="/dashboard" className="underline">Go to dashboard</Link>
           </div>
-        </div>
-      ) : (
-        <p className="mb-6 text-sm text-neutral-400">
-          Sign up or sign in to continue. We’ll remember your team name.
-        </p>
+          {/* Don’t render accept UI when blocked */}
+          {error && (
+            <div className="mt-6 text-red-400">
+              <div className="font-semibold">Error</div>
+              <div className="text-sm">{error}</div>
+              {detail && <div className="text-xs mt-1 opacity-80">{detail}</div>}
+            </div>
+          )}
+          {okMsg && (
+            <div className="mt-6 text-green-400">
+              <div className="font-semibold">Success</div>
+              <div className="text-sm">{okMsg}</div>
+            </div>
+          )}
+          {/* Early return UI */}
+          <div className="mt-10" />
+          {null}
+        </>
       )}
 
-      <div className="flex gap-3">
-        <button
-          onClick={() => void acceptInvite()}
-          disabled={busy || (authed ? !!teamError : false)}
-          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-5 py-2 rounded-lg"
-        >
-          {busy ? "Accepting…" : "Accept invite"}
-        </button>
-        <Link href="/dashboard" className="border border-neutral-600 hover:bg-neutral-800 px-5 py-2 rounded-lg">
-          Decline
-        </Link>
-      </div>
+      {/* Accept UI (only when token ok) */}
+      {tokenStatus === "ok" && (
+        <>
+          {authed ? (
+            <div className="mb-6">
+              <label className="block text-sm text-neutral-300 mb-2" htmlFor="teamName">
+                Team name <span className="text-red-400">*</span>
+              </label>
+              <input
+                id="teamName"
+                value={teamName}
+                onChange={(e) => onTeamChange(e.target.value)}
+                placeholder="e.g., Dunk Lords"
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-2 outline-none focus:border-blue-500"
+                autoComplete="off"
+                maxLength={30}
+              />
+              <div className="mt-1 flex items-center justify-between text-xs text-neutral-400">
+                <span>{teamName.trim().length}/30</span>
+                {teamError && <span className="text-red-400">{teamError}</span>}
+              </div>
+            </div>
+          ) : (
+            <p className="mb-6 text-sm text-neutral-400">
+              Sign up or sign in to continue. We’ll remember your team name.
+            </p>
+          )}
 
-      {error && (
-        <div className="mt-6 text-red-400">
-          <div className="font-semibold">Error</div>
-          <div className="text-sm">{error}</div>
-          {detail && <div className="text-xs mt-1 opacity-80">{detail}</div>}
-        </div>
-      )}
+          <div className="flex gap-3">
+            <button
+              onClick={() => void acceptInvite()}
+              disabled={busy || (authed ? !!teamError : false)}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-5 py-2 rounded-lg"
+            >
+              {busy ? "Accepting…" : "Accept invite"}
+            </button>
+            <Link href="/dashboard" className="border border-neutral-600 hover:bg-neutral-800 px-5 py-2 rounded-lg">
+              Decline
+            </Link>
+          </div>
 
-      {okMsg && (
-        <div className="mt-6 text-green-400">
-          <div className="font-semibold">Success</div>
-          <div className="text-sm">{okMsg}</div>
-        </div>
+          {error && (
+            <div className="mt-6 text-red-400">
+              <div className="font-semibold">Error</div>
+              <div className="text-sm">{error}</div>
+              {detail && <div className="text-xs mt-1 opacity-80">{detail}</div>}
+            </div>
+          )}
+          {okMsg && (
+            <div className="mt-6 text-green-400">
+              <div className="font-semibold">Success</div>
+              <div className="text-sm">{okMsg}</div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

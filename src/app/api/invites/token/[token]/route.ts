@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: { token: string } };
 
-/** JSON helper that keeps any headers (incl. Set-Cookie) written on `res`. */
+/** JSON helper that preserves any headers (incl. Set-Cookie) written on `res`. */
 function json(res: NextResponse, body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
@@ -30,16 +30,41 @@ export async function GET(req: NextRequest, { params }: Params) {
   }
 
   try {
-    const { data, error } = await sb
+    const { data: inv, error } = await sb
       .from("invites")
-      .select("id, league_id, email, invited_by, token, accepted, created_at")
+      .select(
+        "id, league_id, email, invited_by, token, accepted, created_at, expires_at, revoked_at"
+      )
       .eq("token", params.token)
       .maybeSingle();
 
     if (error) return json(res, { error: error.message }, 400);
-    if (!data)  return json(res, { error: "Invite not found" }, 404);
+    if (!inv)  return json(res, { error: "Invite not found", reason: "invalid" }, 404);
 
-    return json(res, { ok: true, invite: data });
+    // Hardening: block revoked, expired, or already used tokens
+    if (inv.revoked_at) {
+      return json(res, { error: "Invite has been revoked", reason: "revoked" }, 410);
+    }
+
+    if (inv.expires_at && new Date(inv.expires_at).getTime() <= Date.now()) {
+      return json(res, { error: "Invite has expired", reason: "expired" }, 410);
+    }
+
+    if (inv.accepted) {
+      return json(res, { error: "Invite already used", reason: "used" }, 409);
+    }
+
+    // Success — return only what the client needs
+    const safe = {
+      id: inv.id,
+      league_id: inv.league_id,
+      email: inv.email,
+      token: inv.token,
+      created_at: inv.created_at,
+      expires_at: inv.expires_at,
+    };
+
+    return json(res, { ok: true, invite: safe }, 200);
   } catch (e: any) {
     return json(res, { error: e?.message ?? "Server error" }, 500);
   }
