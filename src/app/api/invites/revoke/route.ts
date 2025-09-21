@@ -25,35 +25,30 @@ export async function POST(req: NextRequest) {
     id = typeof body?.id === "string" ? body.id.trim() : undefined;
     token = typeof body?.token === "string" ? body.token.trim() : undefined;
     reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 180) : null;
-  } catch { /* ignore */ }
+  } catch {}
 
   if (!id && !token) {
     return jsonWithRes(res, { error: "id or token is required." }, 400);
   }
 
-  // Load invite
+  // Load invite (IMPORTANT: await the query so `inv` is the row, not a builder)
   const sel = sb
     .from("invites")
     .select("id, league_id, invited_by, accepted, revoked_at")
     .limit(1);
 
-  const query = id ? sel.eq("id", id) : sel.eq("token", token!);
-  const { data: inv, error: selErr } = await query.maybeSingle();
+  const q = id ? sel.eq("id", id) : sel.eq("token", token!);
+  const { data: inv, error: selErr } = await q.maybeSingle();
 
   if (selErr) {
     deverror("[invite:revoke] load failed", selErr);
     return jsonWithRes(res, { error: "Failed to load invite." }, 500);
   }
   if (!inv) return jsonWithRes(res, { error: "Invite not found." }, 404);
+  if (inv.accepted) return jsonWithRes(res, { error: "Invite already accepted." }, 409);
+  if (inv.revoked_at) return jsonWithRes(res, { ok: true, alreadyRevoked: true }, 200);
 
-  if (inv.accepted) {
-    return jsonWithRes(res, { error: "Invite already accepted." }, 409);
-  }
-  if (inv.revoked_at) {
-    return jsonWithRes(res, { ok: true, alreadyRevoked: true }, 200);
-  }
-
-  // Permission: owner/admin of the league OR the original inviter
+  // Permission: owner/admin OR the original inviter
   const { data: lm } = await sb
     .from("league_members")
     .select("role")
@@ -64,10 +59,7 @@ export async function POST(req: NextRequest) {
   const canRevoke =
     (lm && ["owner", "admin"].includes(lm.role as any)) ||
     inv.invited_by === user.id;
-
-  if (!canRevoke) {
-    return jsonWithRes(res, { error: "Forbidden" }, 403);
-  }
+  if (!canRevoke) return jsonWithRes(res, { error: "Forbidden" }, 403);
 
   // Revoke
   const now = new Date().toISOString();

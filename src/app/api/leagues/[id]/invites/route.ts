@@ -1,143 +1,89 @@
 // src/app/api/leagues/[id]/invites/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
-import { randomUUID } from "node:crypto";
+import { NextRequest } from "next/server";
+import { supabaseServer, jsonWithRes } from "@/lib/supabaseServer";
+import { devlog, deverror } from "@/lib/devlog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Params = { params: { id: string } };
 
-/** JSON helper that preserves Set-Cookie headers from `res`. */
-function json(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
-function validEmail(e: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-}
-
-/** GET → list invites for league (owner/admin see all; others see their own) */
 export async function GET(req: NextRequest, { params }: Params) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
+  const { client: sb, response: res } = supabaseServer(req);
+  const leagueId = params.id;
+
+  // auth
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr || !user) return jsonWithRes(res, { error: "Not authenticated." }, 401);
+
+  // owner/admin gate
+  const { data: lm, error: lmErr } = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (lmErr) {
+    deverror("[invites:list] membership lookup failed", lmErr);
+    return jsonWithRes(res, { error: "Failed to verify permissions." }, 500);
+  }
+  if (!lm || !["owner", "admin"].includes(lm.role as any)) {
+    return jsonWithRes(res, { error: "Forbidden" }, 403);
   }
 
-  try {
-    const league_id = params.id;
+  // fetch invites
+  const { data, error } = await sb
+    .from("invites")
+    .select(
+      "id, token, email, invited_by, created_at, expires_at, accepted, accepted_at, revoked_at"
+    )
+    .eq("league_id", leagueId)
+    .order("created_at", { ascending: false });
 
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
-
-    const { data: lm } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    const isOwner = lm && ["owner", "admin"].includes(lm.role as any);
-
-    const q = sb
-      .from("invites")
-      .select("id, league_id, email, invited_by, token, accepted, created_at")
-      .eq("league_id", league_id)
-      .order("created_at", { ascending: false });
-
-    const { data, error } = isOwner ? await q : await q.eq("invited_by", user.id);
-    if (error) return json(res, { error: error.message }, 400);
-
-    return json(res, { ok: true, invites: data ?? [] });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
-  }
-}
-
-/** POST { email } → create invite (owner/admin only) */
-export async function POST(req: NextRequest, { params }: Params) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
+  if (error) {
+    deverror("[invites:list] fetch failed", error);
+    return jsonWithRes(res, { error: "Failed to load invites." }, 500);
   }
 
-  try {
-    const league_id = params.id;
+  const now = new Date();
+  const open: any[] = [];
+  const accepted: any[] = [];
+  const denied: any[] = []; // revoked/expired; API omits public from this bucket
 
-    let email: string | undefined;
-    try {
-      const body = (await req.json()) as { email?: string };
-      email = body.email?.trim();
-    } catch {
-      /* ignored; validated below */
+  for (const row of data ?? []) {
+    const isPublic = row.email == null;
+    const isRevoked = !!row.revoked_at;
+    const isAccepted = !!row.accepted;
+    const isExpired = row.expires_at ? new Date(row.expires_at) <= now : false;
+
+    const base = {
+      id: row.id as string,
+      token: row.token as string,
+      email: row.email as string | null,
+      isPublic,
+      created_at: row.created_at as string,
+      expires_at: row.expires_at as string | null,
+      accepted_at: row.accepted_at as string | null,
+      revoked_at: row.revoked_at as string | null,
+    };
+
+    if (isAccepted) {
+      accepted.push(base);
+    } else if (!isRevoked && !isExpired) {
+      open.push(base);
+    } else {
+      if (!isPublic) denied.push(base); // hide "denied" for public invites
     }
-
-    if (!email || !validEmail(email)) return json(res, { error: "valid email required" }, 400);
-
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
-
-    const { data: lm } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (!lm || !["owner", "admin"].includes(lm.role as any)) {
-      return json(res, { error: "Forbidden" }, 403);
-    }
-
-    // prevent duplicate pending invite
-    const { data: existing, error: exErr } = await sb
-      .from("invites")
-      .select("id, accepted")
-      .eq("league_id", league_id)
-      .eq("email", email.toLowerCase())
-      .order("created_at", { ascending: false })
-      .maybeSingle();
-
-    if (exErr) return json(res, { error: `invite check failed: ${exErr.message}` }, 400);
-    if (existing && existing.accepted === false) {
-      return json(res, { error: "pending invite already exists for this email" }, 409);
-    }
-
-    const token = randomUUID().replace(/-/g, "");
-    const { error: insErr } = await sb.from("invites").insert({
-      league_id,
-      email: email.toLowerCase(),
-      invited_by: user.id,
-      token,
-      accepted: false,
-    });
-    if (insErr) return json(res, { error: `insert failed: ${insErr.message}` }, 400);
-
-    return json(res, { ok: true, token, acceptUrl: `/invite/${token}` });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
   }
+
+  devlog("[invites:list]", {
+    leagueId,
+    counts: { open: open.length, accepted: accepted.length, denied: denied.length },
+  });
+
+  return jsonWithRes(res, { ok: true, open, accepted, denied }, 200);
 }

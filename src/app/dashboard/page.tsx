@@ -1,5 +1,6 @@
 // src/app/dashboard/page.tsx
 import InviteForm from "@/components/InviteForm";
+import InvitesPanel from "@/components/InvitesPanel";
 import { supabaseServer } from "@/lib/supabaseServer";
 import Link from "next/link";
 
@@ -97,21 +98,16 @@ export default async function DashboardPage() {
       {rows.length === 0 && (
         <div className="rounded border border-gray-700 p-6">
           <p>You’re not in any leagues yet.</p>
-          <p className="text-sm text-gray-400">
-            Create one or ask for an invite.
-          </p>
+          <p className="text-sm text-gray-400">Create one or ask for an invite.</p>
         </div>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {rows.map((r) => {
           const lg = r.leagues;
-          const isOwner = r.role === "owner" || r.role === "admin";
+          const isOwnerOrAdmin = r.role === "owner" || r.role === "admin";
           return (
-            <div
-              key={lg.id}
-              className="rounded border border-gray-700 p-4 space-y-3"
-            >
+            <div key={lg.id} className="rounded border border-gray-700 p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-lg font-semibold">{lg.name}</div>
@@ -127,10 +123,16 @@ export default async function DashboardPage() {
                 </Link>
               </div>
 
-              {isOwner ? (
-                <div className="rounded border border-gray-700 p-3">
-                  <div className="text-sm font-medium mb-2">Invite someone</div>
-                  <InviteForm leagueId={lg.id} />
+              {/* Owner/Admin controls */}
+              {isOwnerOrAdmin ? (
+                <div className="space-y-3">
+                  <div className="rounded border border-gray-700 p-3">
+                    <div className="text-sm font-medium mb-2">Invite someone</div>
+                    <InviteForm leagueId={lg.id} />
+                  </div>
+
+                  {/* Collapsible lists for Open / Accepted / Denied; includes Revoke */}
+                  <InvitesPanel leagueId={lg.id} />
                 </div>
               ) : (
                 <div className="text-xs text-gray-500">
