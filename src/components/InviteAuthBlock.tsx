@@ -1,66 +1,74 @@
+// src/components/InviteAuthBlock.tsx
 "use client";
 
-import { useMemo } from "react";
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { supabaseClient } from "@/lib/supabaseClient";
 import { siteOrigin } from "@/lib/siteOrigin";
 
-type Props = {
-  /** Invite token slug from /invite/[token] */
-  token: string;
-  /** Optional override for where to continue after auth; defaults to /invite/[token] */
-  next?: string;
-};
-
 /**
- * Shown on the invite landing page whenever the user is not authenticated yet.
- * Provides canonical links to Sign up / Log in that preserve the invite flow.
+ * Small gate used on the invite page — if the user is not authenticated we show
+ * sign-up / sign-in links. If they become authenticated in another tab (magic link)
+ * this component notices and updates.
  */
-export default function InviteAuthBlock({ token, next }: Props) {
-  // The canonical absolute URL for the invite we want the user to come back to
-  const invitePath = useMemo(
-    () => next || `/invite/${token}`,
-    [token, next]
-  );
-
-  const absoluteInviteUrl = useMemo(
-    () => new URL(invitePath, siteOrigin()).toString(),
-    [invitePath]
-  );
+export default function InviteAuthBlock({ nextPath }: { nextPath: string }) {
+  const [email, setEmail] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const signupHref = useMemo(
-    () => `/signup?next=${encodeURIComponent(invitePath)}`,
-    [invitePath]
+    () => `/signup?next=${encodeURIComponent(nextPath)}`,
+    [nextPath]
+  );
+  const loginHref = useMemo(
+    () => `/login?next=${encodeURIComponent(nextPath)}`,
+    [nextPath]
   );
 
-  const loginHref = useMemo(
-    () => `/login?next=${encodeURIComponent(invitePath)}`,
-    [invitePath]
-  );
+  useEffect(() => {
+    let mounted = true;
+
+    // Initial session check
+    supabaseClient.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+      setEmail(data.user?.email ?? null);
+      setLoading(false);
+    });
+
+    // React to auth changes across tabs
+    const { data: sub } = supabaseClient.auth.onAuthStateChange((_e, s) => {
+      setEmail(s?.user?.email ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      sub?.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) {
+    return <div className="text-sm text-gray-400">Checking session…</div>;
+  }
+
+  if (email) {
+    return (
+      <div className="text-sm text-gray-300">
+        You’re signed in as <span className="font-mono">{email}</span>.
+      </div>
+    );
+  }
 
   return (
-    <div className="rounded border border-gray-700 p-4 space-y-3">
-      <div className="text-sm text-gray-300">
-        You’ll need an account before you can join this league.
-      </div>
-
-      <div className="flex gap-2">
-        <Link
-          className="rounded bg-blue-600 px-3 py-2 text-sm hover:bg-blue-500"
-          href={signupHref}
-        >
-          Create account
-        </Link>
-        <Link
-          className="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600"
-          href={loginHref}
-        >
-          Sign in
-        </Link>
-      </div>
-
-      <div className="text-xs text-gray-400">
-        After you’re signed in, we’ll return you to:
-        <div className="mt-1 break-all font-mono">{absoluteInviteUrl}</div>
+    <div className="space-x-3 text-sm">
+      <Link className="underline" href={signupHref}>
+        Create an account
+      </Link>
+      <span className="text-gray-500">or</span>
+      <Link className="underline" href={loginHref}>
+        Sign in
+      </Link>
+      <span className="text-gray-500"> to accept the invite.</span>
+      <div className="mt-2 text-xs text-gray-500">
+        Links use <span className="font-mono">{siteOrigin()}</span> so your session works across tabs.
       </div>
     </div>
   );
