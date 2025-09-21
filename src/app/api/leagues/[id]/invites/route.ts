@@ -7,23 +7,37 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: { id: string } };
 
-/**
- * GET /api/leagues/:id/invites
- *
- * Returns buckets of invites for a league:
- *  - open: not accepted, not revoked, not expired
- *  - accepted: accepted === true (or accepted_at set)
- *  - denied: revoked or expired (and not accepted)
- *
- * ALWAYS returns arrays for each bucket, even on empty results.
- * On auth/permission errors, returns an error with proper status
- * but still includes empty arrays so clients never explode.
- */
+type Invite = {
+  id: string;
+  league_id: string;
+  email: string | null;
+  token: string;
+  created_at: string | null;
+  expires_at: string | null;
+  accepted: boolean | null;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  // optional shape (may not exist in DB)
+  is_public?: boolean | null;
+};
+
+function bucketize(list: Invite[]) {
+  const nowIso = new Date().toISOString();
+  const open = list.filter(
+    (i) => !i.accepted && !i.revoked_at && !!i.expires_at && String(i.expires_at) > nowIso
+  );
+  const accepted = list.filter((i) => i.accepted || !!i.accepted_at);
+  const denied = list.filter(
+    (i) => !i.accepted && (!!i.revoked_at || !i.expires_at || String(i.expires_at) <= nowIso)
+  );
+  return { open, accepted, denied };
+}
+
 export async function GET(req: NextRequest, { params }: Params) {
   const { client: sb, response: res } = supabaseRoute(req);
   const leagueId = params.id;
 
-  // Auth
+  // auth
   const {
     data: { user },
     error: uerr,
@@ -31,7 +45,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   if (uerr) return jsonWithRes(res, { error: uerr.message, open: [], accepted: [], denied: [] }, 500);
   if (!user) return jsonWithRes(res, { error: "Unauthorized", open: [], accepted: [], denied: [] }, 401);
 
-  // Owner/admin check
+  // role check
   const { data: lm, error: lmErr } = await sb
     .from("league_members")
     .select("role")
@@ -41,37 +55,53 @@ export async function GET(req: NextRequest, { params }: Params) {
   if (lmErr) return jsonWithRes(res, { error: lmErr.message, open: [], accepted: [], denied: [] }, 500);
 
   const isOwnerOrAdmin = lm && ["owner", "admin"].includes(String(lm.role || "").toLowerCase());
-  if (!isOwnerOrAdmin) return jsonWithRes(res, { error: "Forbidden", open: [], accepted: [], denied: [] }, 403);
+  if (!isOwnerOrAdmin) {
+    return jsonWithRes(res, { error: "Forbidden", open: [], accepted: [], denied: [] }, 403);
+  }
 
-  // Fetch once, bucket on the server
-  const nowIso = new Date().toISOString();
-  const columns =
-    "id, league_id, email, token, created_at, expires_at, accepted, accepted_at, revoked_at, is_public";
+  // --- Fetch with graceful fallback for missing columns ---
+  const baseCols =
+    "id, league_id, email, token, created_at, expires_at, accepted, accepted_at, revoked_at";
+  const tryCols = `${baseCols}, is_public`; // may not exist in older DBs
 
-  const { data, error } = await sb
-    .from("invites")
-    .select(columns)
-    .eq("league_id", leagueId)
-    .order("created_at", { ascending: false });
+  // First attempt: include is_public
+  let rows: Invite[] = [];
+  let firstErr: string | null = null;
 
-  if (error) return jsonWithRes(res, { error: error.message, open: [], accepted: [], denied: [] }, 400);
+  {
+    const { data, error } = await sb
+      .from("invites")
+      .select(tryCols)
+      .eq("league_id", leagueId)
+      .order("created_at", { ascending: false });
 
-  const list = Array.isArray(data) ? data : [];
+    if (!error && Array.isArray(data)) {
+      rows = data as Invite[];
+    } else if (error && /column .*is_public.* does not exist/i.test(error.message)) {
+      // Retry without is_public
+      const { data: data2, error: error2 } = await sb
+        .from("invites")
+        .select(baseCols)
+        .eq("league_id", leagueId)
+        .order("created_at", { ascending: false });
 
-  // Buckets:
-  const open = list.filter(
-    (i) => !i.accepted && !i.revoked_at && !!i.expires_at && String(i.expires_at) > nowIso
-  );
-  const accepted = list.filter((i) => i.accepted || !!i.accepted_at);
-  const denied = list.filter(
-    (i) => !i.accepted && (!!i.revoked_at || !i.expires_at || String(i.expires_at) <= nowIso)
-  );
+      if (error2) {
+        firstErr = error2.message;
+      } else {
+        // synthesize is_public from "no email = public"
+        rows = (data2 as Invite[]).map((r) => ({ ...r, is_public: r.email == null }));
+      }
+    } else if (error) {
+      firstErr = error.message;
+    }
+  }
 
-  // Always return arrays
-  return jsonWithRes(res, {
-    ok: true,
-    open,
-    accepted,
-    denied,
-  });
+  if (!rows.length && firstErr) {
+    // Return empty arrays but with error string so UI shows a friendly message and never crashes
+    return jsonWithRes(res, { error: `Failed to load invites: ${firstErr}`, open: [], accepted: [], denied: [] }, 400);
+  }
+
+  // Bucket and return — ALWAYS arrays
+  const { open, accepted, denied } = bucketize(rows);
+  return jsonWithRes(res, { ok: true, open, accepted, denied });
 }
