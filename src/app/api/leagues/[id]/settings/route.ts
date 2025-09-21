@@ -24,6 +24,7 @@ function json(res: NextResponse, body: unknown, status = 200) {
   });
 }
 
+/** PATCH → owner updates league settings */
 export async function PATCH(req: NextRequest, { params }: Params) {
   let sb, res: NextResponse;
   try {
@@ -43,11 +44,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (typeof body.name === "string") payload.name = body.name.trim();
     if ("season" in body) payload.season = body.season ?? null;
     if ("ruleset" in body) payload.ruleset = body.ruleset ?? null;
-    if ("is_public" in body) payload.is_public = Boolean(body.is_public);
+    if ("is_public" in body) payload.is_public = !!body.is_public;
 
-    if (!Object.keys(payload).length) return json(res, { error: "No fields to update" }, 400);
+    if (Object.keys(payload).length === 0) return json(res, { error: "No fields to update" }, 400);
 
-    // auth
+    // auth + owner check
     const {
       data: { user },
       error: uerr,
@@ -55,22 +56,25 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-    // owner/admin check
-    const { data: lm } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
+    const { data: league, error: lerr } = await sb
+      .from("leagues")
+      .select("id, owner_id")
+      .eq("id", league_id)
       .maybeSingle();
 
-    if (!lm || !["owner", "admin"].includes(lm.role as any)) {
-      return json(res, { error: "Forbidden" }, 403);
-    }
+    if (lerr) return json(res, { error: lerr.message }, 400);
+    if (!league || league.owner_id !== user.id) return json(res, { error: "Forbidden" }, 403);
 
-    const { error } = await sb.from("leagues").update(payload).eq("id", league_id);
-    if (error) return json(res, { error: error.message }, 400);
+    const { data: updated, error: upErr } = await sb
+      .from("leagues")
+      .update(payload)
+      .eq("id", league_id)
+      .select("id, name, season, ruleset, is_public")
+      .maybeSingle();
 
-    return json(res, { ok: true });
+    if (upErr) return json(res, { error: upErr.message }, 400);
+
+    return json(res, { ok: true, league: updated });
   } catch (e: any) {
     return json(res, { error: e?.message ?? "Server error" }, 500);
   }

@@ -5,6 +5,7 @@ import { supabaseRoute } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// IMPORTANT: this folder is .../id/[id]/ so the param is "id"
 type Params = { params: { id: string } };
 
 /** Return JSON while preserving Set-Cookie headers carried on `res`. */
@@ -55,8 +56,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       .maybeSingle();
 
     const canView =
-      (lm && ["owner", "admin"].includes(lm.role as any)) ||
-      data.invited_by === user.id;
+      (lm && ["owner", "admin"].includes(lm.role as any)) || data.invited_by === user.id;
 
     if (!canView) return json(res, { error: "Forbidden" }, 403);
 
@@ -105,8 +105,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       .maybeSingle();
 
     const canDelete =
-      (lm && ["owner", "admin"].includes(lm.role as any)) ||
-      inv.invited_by === user.id;
+      (lm && ["owner", "admin"].includes(lm.role as any)) || inv.invited_by === user.id;
 
     if (!canDelete) return json(res, { error: "Forbidden" }, 403);
 

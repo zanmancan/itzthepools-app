@@ -18,7 +18,7 @@ function json(res: NextResponse, body: unknown, status = 200) {
   });
 }
 
-/** GET → list members for a league (visible to any member) */
+/** GET → list members for league */
 export async function GET(req: NextRequest, { params }: Params) {
   let sb, res: NextResponse;
   try {
@@ -40,20 +40,19 @@ export async function GET(req: NextRequest, { params }: Params) {
     if (uerr) return json(res, { error: uerr.message }, 500);
     if (!user) return json(res, { error: "Unauthorized" }, 401);
 
-    // Must be a member to view members
-    const { data: me } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (!me) return json(res, { error: "Forbidden" }, 403);
-
     const { data, error } = await sb
       .from("league_members")
-      .select("user_id, role, profiles:user_id ( id, email, display_name )")
+      .select(
+        `
+        league_id,
+        user_id,
+        role,
+        inserted_at,
+        profiles:user_id ( id, email, team_name )
+      `
+      )
       .eq("league_id", league_id)
-      .order("role", { ascending: true });
+      .order("inserted_at", { ascending: true });
 
     if (error) return json(res, { error: error.message }, 400);
     return json(res, { ok: true, members: data ?? [] });

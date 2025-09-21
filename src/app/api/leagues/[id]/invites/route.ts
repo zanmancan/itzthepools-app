@@ -126,7 +126,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       return json(res, { error: "pending invite already exists for this email" }, 409);
     }
 
-    const token = randomUUID();
+    const token = randomUUID().replace(/-/g, "");
     const { error: insErr } = await sb.from("invites").insert({
       league_id,
       email: email.toLowerCase(),
