@@ -88,11 +88,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 4) Load invite by token (so we can validate email & expiry first)
+  // 4) Load invite by token (so we can validate email/expiry/revoked first)
   devtime("invite:accept:load");
   const { data: inv, error: loadErr } = await sb
     .from("invites")
-    .select("id, league_id, email, accepted, expires_at")
+    .select("id, league_id, email, accepted, expires_at, revoked_at")
     .eq("token", token)
     .maybeSingle();
   devtimeEnd("invite:accept:load");
@@ -112,14 +112,20 @@ export async function POST(req: NextRequest) {
     return jsonWithRes(res, { ok: true, alreadyAccepted: true, league_id: String(inv.league_id) }, 200);
   }
 
-  // 6) Expiry check
+  // 6) Revoked?
+  if (inv.revoked_at) {
+    devlog("[invite:accept] revoked", { invite_id: inv.id, revoked_at: inv.revoked_at });
+    return jsonWithRes(res, { error: "This invite has been revoked." }, 403);
+  }
+
+  // 7) Expiry check
   const now = new Date();
   if (inv.expires_at && new Date(inv.expires_at) <= now) {
     devlog("[invite:accept] expired", { invite_id: inv.id, expires_at: inv.expires_at });
     return jsonWithRes(res, { error: "Invite has expired." }, 410);
   }
 
-  // 7) Email-locked guard (public invites have email=null)
+  // 8) Email-locked guard (public invites have email=null)
   const inviteEmail = String(inv.email ?? "").toLowerCase();
   const userEmail = String(user.email ?? "").toLowerCase();
   if (inviteEmail && inviteEmail !== userEmail) {
@@ -127,7 +133,7 @@ export async function POST(req: NextRequest) {
     return jsonWithRes(res, { error: "This invite is not for your email address." }, 403);
   }
 
-  // 8) Idempotent membership
+  // 9) Idempotent membership
   const league_id = String(inv.league_id);
   const { data: existing, error: existErr } = await sb
     .from("league_members")
@@ -148,12 +154,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 9) Mark invite accepted (+ stamp accepted_at) with a guard
+  // 10) Mark invite accepted (+ stamp accepted_at) with a guard
   const { error: updErr } = await sb
     .from("invites")
-    .update({ accepted: true, accepted_at: now.toISOString() })
+    .update({ accepted: true, accepted_at: new Date().toISOString() })
     .eq("id", inv.id)
-    .eq("accepted", false);
+    .eq("accepted", false)
+    .is("revoked_at", null);
   if (updErr) {
     // membership is already in place; don’t block success, just log
     deverror("[invite:accept] update accepted failed", updErr, { invite_id: inv.id });
