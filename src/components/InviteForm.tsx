@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { siteOrigin } from "@/lib/siteOrigin";
 
 type Props = { leagueId: string };
 
@@ -20,17 +21,28 @@ export default function InviteForm({ leagueId }: Props) {
       const res = await fetch("/api/invites/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ league_id: leagueId, email: isPublic ? null : email || null, isPublic }),
+        body: JSON.stringify({
+          league_id: leagueId,
+          email: isPublic ? null : email || null,
+          isPublic,
+        }),
         cache: "no-store",
       });
 
       const raw = await res.text();
       let json: any = {};
-      try { json = raw ? JSON.parse(raw) : {}; } catch { json = { errorText: raw }; }
+      try {
+        json = raw ? JSON.parse(raw) : {};
+      } catch {
+        json = { errorText: raw };
+      }
 
       if (!res.ok) {
         const msg =
-          json?.error || json?.message || json?.errorText || `HTTP ${res.status} ${res.statusText || ""}`.trim();
+          json?.error ||
+          json?.message ||
+          json?.errorText ||
+          `HTTP ${res.status} ${res.statusText || ""}`.trim();
         setError(msg);
         return;
       }
@@ -59,13 +71,15 @@ export default function InviteForm({ leagueId }: Props) {
   async function doCopyLink() {
     if (!acceptUrl) return;
     try {
-      const absolute = new URL(acceptUrl, window.location.origin).toString();
+      const absolute = new URL(acceptUrl, siteOrigin()).toString();
       await navigator.clipboard.writeText(absolute);
       alert("Invite link copied to clipboard!");
     } catch {
       alert("Could not copy. Manually copy the URL shown.");
     }
   }
+
+  const absolute = acceptUrl ? new URL(acceptUrl, siteOrigin()).toString() : null;
 
   return (
     <form onSubmit={onCreate} className="space-y-3">
@@ -101,18 +115,14 @@ export default function InviteForm({ leagueId }: Props) {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
-      {acceptUrl && (
+      {absolute && (
         <div className="rounded border border-gray-700 p-3">
           <div className="text-xs text-gray-400">Invite link</div>
-          <div className="break-all text-sm">
-            {typeof window === "undefined"
-              ? acceptUrl
-              : new URL(acceptUrl, window.location.origin).toString()}
-          </div>
+          <div className="break-all text-sm">{absolute}</div>
           <div className="mt-2 flex gap-2">
             <a
               className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600"
-              href={acceptUrl}
+              href={absolute}
               target="_blank"
             >
               Open

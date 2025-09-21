@@ -1,155 +1,66 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useMemo } from "react";
+import Link from "next/link";
+import { siteOrigin } from "@/lib/siteOrigin";
 
-type Props = { token: string };
+type Props = {
+  /** Invite token slug from /invite/[token] */
+  token: string;
+  /** Optional override for where to continue after auth; defaults to /invite/[token] */
+  next?: string;
+};
 
-export default function InviteAuthBlock({ token }: Props) {
-  const sb = supabaseBrowser();
+/**
+ * Shown on the invite landing page whenever the user is not authenticated yet.
+ * Provides canonical links to Sign up / Log in that preserve the invite flow.
+ */
+export default function InviteAuthBlock({ token, next }: Props) {
+  // The canonical absolute URL for the invite we want the user to come back to
+  const invitePath = useMemo(
+    () => next || `/invite/${token}`,
+    [token, next]
+  );
 
-  const siteOrigin = useMemo(() => {
-    if (typeof window !== "undefined") return window.location.origin;
-    return process.env.NEXT_PUBLIC_SITE_URL || "";
-  }, []);
+  const absoluteInviteUrl = useMemo(
+    () => new URL(invitePath, siteOrigin()).toString(),
+    [invitePath]
+  );
 
-  const nextUrl = `/invite/${token}`;
-  const signinHref = `/login?next=${encodeURIComponent(nextUrl)}`;
-  const signupHref = `/signup?next=${encodeURIComponent(nextUrl)}`;
+  const signupHref = useMemo(
+    () => `/signup?next=${encodeURIComponent(invitePath)}`,
+    [invitePath]
+  );
 
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const [showCode, setShowCode] = useState(false);
-  const [code, setCode] = useState("");
-
-  async function sendMagicLink(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    setBusy(true);
-    try {
-      const redirectTo =
-        (process.env.NEXT_PUBLIC_SITE_URL || siteOrigin || "") +
-        `/auth/callback?next=${encodeURIComponent(nextUrl)}`;
-
-      const { error } = await sb.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo },
-      });
-      if (error) {
-        setErr(error.message);
-        return;
-      }
-      setSent(true);
-    } catch (e: any) {
-      setErr(e?.message ?? "Something went wrong");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verifyCode(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    setBusy(true);
-    try {
-      const { error } = await sb.auth.verifyOtp({ email, token: code, type: "email" });
-      if (error) {
-        setErr(error.message);
-        return;
-      }
-      window.location.href = nextUrl;
-    } catch (e: any) {
-      setErr(e?.message ?? "Invalid or expired code");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const loginHref = useMemo(
+    () => `/login?next=${encodeURIComponent(invitePath)}`,
+    [invitePath]
+  );
 
   return (
-    <div className="space-y-4">
-      <form
-        onSubmit={(e) => {
-          // eslint-disable-next-line @typescript-eslint/no-floating-promises
-          sendMagicLink(e);
-        }}
-        className="space-y-3"
-      >
-        <label className="block text-sm text-gray-300">Continue with your email</label>
-        <input
-          type="email"
-          required
-          placeholder="your@email.com"
-          className="w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          disabled={busy}
-        />
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500 disabled:opacity-50"
-        >
-          {busy ? "Sending…" : "Send magic link"}
-        </button>
-
-        {sent && (
-          <p className="text-sm text-emerald-400">
-            Check your inbox—open the link or enter the 6-digit code below.
-          </p>
-        )}
-
-        {err && <div className="text-sm text-red-400">{err}</div>}
-      </form>
-
-      <div className="space-y-2">
-        {!showCode ? (
-          <button
-            type="button"
-            className="text-sm underline text-gray-300"
-            onClick={() => setShowCode(true)}
-          >
-            I have a 6-digit code
-          </button>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              // eslint-disable-next-line @typescript-eslint/no-floating-promises
-              verifyCode(e);
-            }}
-            className="space-y-2"
-          >
-            <div className="flex gap-2">
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                placeholder="Enter code"
-                className="w-40 rounded border border-gray-700 bg-black px-3 py-2 text-sm tracking-widest"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                disabled={busy}
-              />
-              <button
-                type="submit"
-                disabled={busy || code.length !== 6 || !email}
-                className="rounded bg-gray-700 px-3 py-2 text-white hover:bg-gray-600 disabled:opacity-50"
-              >
-                {busy ? "Verifying…" : "Verify"}
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">We sent the code to the email above.</p>
-          </form>
-        )}
+    <div className="rounded border border-gray-700 p-4 space-y-3">
+      <div className="text-sm text-gray-300">
+        You’ll need an account before you can join this league.
       </div>
 
-      <div className="text-sm text-gray-400">
-        Prefer passwords? <a className="underline" href={signinHref}>Use password instead</a>
-        {" · "}
-        New here? <a className="underline" href={signupHref}>Create account</a>
+      <div className="flex gap-2">
+        <Link
+          className="rounded bg-blue-600 px-3 py-2 text-sm hover:bg-blue-500"
+          href={signupHref}
+        >
+          Create account
+        </Link>
+        <Link
+          className="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600"
+          href={loginHref}
+        >
+          Sign in
+        </Link>
+      </div>
+
+      <div className="text-xs text-gray-400">
+        After you’re signed in, we’ll return you to:
+        <div className="mt-1 break-all font-mono">{absoluteInviteUrl}</div>
       </div>
     </div>
   );
