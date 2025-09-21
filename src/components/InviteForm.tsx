@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { siteOrigin } from "@/lib/siteOrigin";
+import { absoluteUrl } from "@/lib/siteOrigin";
 
 type Props = { leagueId: string };
 
@@ -72,15 +72,14 @@ export default function InviteForm({ leagueId }: Props) {
   async function doCopyLink() {
     if (!acceptUrl) return;
     try {
-      const absolute = new URL(acceptUrl, siteOrigin()).toString();
-      await navigator.clipboard.writeText(absolute);
+      await navigator.clipboard.writeText(absoluteUrl(acceptUrl));
       alert("Invite link copied to clipboard!");
     } catch {
       alert("Could not copy. Manually copy the URL shown.");
     }
   }
 
-  const absolute = acceptUrl ? new URL(acceptUrl, siteOrigin()).toString() : null;
+  const absolute = acceptUrl ? absoluteUrl(acceptUrl) : null;
 
   return (
     <form onSubmit={onCreate} className="space-y-3">
@@ -125,6 +124,7 @@ export default function InviteForm({ leagueId }: Props) {
               className="rounded px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600"
               href={absolute}
               target="_blank"
+              rel="noopener noreferrer"
             >
               Open
             </a>
