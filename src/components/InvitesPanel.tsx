@@ -51,6 +51,9 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
   const [days, setDays] = React.useState<number | "">("");
   const [creating, setCreating] = React.useState(false);
 
+  // copy feedback (per-row)
+  const [copiedId, setCopiedId] = React.useState<string | null>(null);
+
   // sections: all collapsed by default
   const [secOpen, setSecOpen] = React.useState<{ open: boolean; accepted: boolean; denied: boolean }>({
     open: false,
@@ -131,9 +134,16 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
     const path = inv.is_public
       ? `/join/public?token=${encodeURIComponent(inv.token || "")}`
       : `/join/invite?token=${encodeURIComponent(inv.token || "")}`;
-    navigator.clipboard
-      .writeText(`${base}${path}`)
-      .catch(() => setError("Copy failed. You can highlight the link text and copy manually."));
+
+    navigator.clipboard.writeText(`${base}${path}`).then(
+      () => {
+        setCopiedId(inv.id);
+        window.setTimeout(() => setCopiedId(null), 1200);
+      },
+      () => {
+        setError("Copy failed. You can highlight the link text and copy manually.");
+      }
+    );
   }
 
   async function onCreateInvite(e: React.FormEvent) {
@@ -296,10 +306,12 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
                         <td className="py-2 pr-3">
                           <button
                             type="button"
-                            className="rounded bg-gray-700 px-2 py-1 text-xs hover:bg-gray-600"
+                            className={`rounded px-2 py-1 text-xs ${
+                              copiedId === inv.id ? "bg-green-700 text-white" : "bg-gray-700 hover:bg-gray-600"
+                            }`}
                             onClick={() => copyLink(inv)}
                           >
-                            Copy
+                            {copiedId === inv.id ? "Copied!" : "Copy"}
                           </button>
                         </td>
                         <td className="py-2 pr-3">
