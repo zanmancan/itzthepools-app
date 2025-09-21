@@ -14,40 +14,54 @@ type League = {
   season: string | null;
 };
 
-// The normalized row our UI expects
+// Raw row from Supabase join (now includes league_id so we can dedupe)
+type LeagueRowRaw = {
+  league_id: string;
+  role: "owner" | "admin" | "member" | string;
+  leagues: League | League[] | null;
+};
+
+// Normalized row our UI expects (one per league)
 type LeagueRow = {
-  leagues: League; // always a single object after normalization
+  leagues: League;
   role: "owner" | "admin" | "member";
 };
 
-// The raw row we might get from Supabase (leagues may be array or object)
-type LeagueRowRaw = {
-  leagues: League | League[] | null;
-  role: "owner" | "admin" | "member" | string; // be tolerant; we normalize
-};
+/** Pick the “higher” role when we see multiple rows for the same league. */
+function pickHigherRole(a: string, b: string): "owner" | "admin" | "member" {
+  const rank: Record<string, number> = { member: 1, admin: 2, owner: 3 };
+  const na = rank[a] ?? 1;
+  const nb = rank[b] ?? 1;
+  return (na >= nb ? a : b) as "owner" | "admin" | "member";
+}
 
+/** Normalize + dedupe per league id. */
 function normalizeRows(raw: LeagueRowRaw[]): LeagueRow[] {
-  return raw
-    .map((r) => {
-      // normalize role
-      const role = (["owner", "admin", "member"] as const).includes(
-        r.role as any
-      )
-        ? (r.role as "owner" | "admin" | "member")
-        : "member";
+  const byLeague = new Map<string, LeagueRow>();
 
-      // normalize leagues -> single object
-      let league: League | null = null;
-      if (Array.isArray(r.leagues)) {
-        league = r.leagues[0] ?? null;
-      } else {
-        league = r.leagues ?? null;
+  for (const r of raw) {
+    // normalize League object
+    const league = Array.isArray(r.leagues) ? r.leagues[0] ?? null : r.leagues;
+    if (!league || !league.id) continue;
+
+    // normalize role
+    const role = (["owner", "admin", "member"] as const).includes(r.role as any)
+      ? (r.role as "owner" | "admin" | "member")
+      : "member";
+
+    const existing = byLeague.get(league.id);
+    if (!existing) {
+      byLeague.set(league.id, { leagues: league, role });
+    } else {
+      // promote role if needed
+      const higher = pickHigherRole(existing.role, role);
+      if (higher !== existing.role) {
+        byLeague.set(league.id, { leagues: league, role: higher });
       }
+    }
+  }
 
-      if (!league) return null; // drop malformed rows
-      return { leagues: league, role };
-    })
-    .filter(Boolean) as LeagueRow[];
+  return [...byLeague.values()];
 }
 
 export default async function DashboardPage() {
@@ -68,10 +82,11 @@ export default async function DashboardPage() {
     );
   }
 
-  // Fetch leagues you’re in (leagues is aliased via FK league_id)
+  // IMPORTANT: filter by this user_id so we only get YOUR memberships
   const { data, error } = await sb
     .from("league_members")
-    .select("role, leagues:league_id ( id, name, ruleset, season )")
+    .select("role, league_id, leagues:league_id ( id, name, ruleset, season )")
+    .eq("user_id", user.id) // <— this was missing; without it you can see others’ rows if RLS allows
     .order("role", { ascending: true });
 
   if (error) {
@@ -83,7 +98,6 @@ export default async function DashboardPage() {
     );
   }
 
-  // Normalize the potentially array-shaped join into a single object per row
   const rows = normalizeRows((data ?? []) as LeagueRowRaw[]);
 
   return (
@@ -123,15 +137,12 @@ export default async function DashboardPage() {
                 </Link>
               </div>
 
-              {/* Owner/Admin controls */}
               {isOwnerOrAdmin ? (
                 <div className="space-y-3">
                   <div className="rounded border border-gray-700 p-3">
                     <div className="text-sm font-medium mb-2">Invite someone</div>
                     <InviteForm leagueId={lg.id} />
                   </div>
-
-                  {/* Collapsible lists for Open / Accepted / Denied; includes Revoke */}
                   <InvitesPanel leagueId={lg.id} />
                 </div>
               ) : (
