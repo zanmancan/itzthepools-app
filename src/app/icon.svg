@@ -1,25 +1,49 @@
-<!-- itzThePools — blue itzTP monogram, fontless (pure vectors) for favicon clarity -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="itzTP">
-  <g fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <!-- 'i' -->
-    <line x1="10" y1="28" x2="10" y2="44"/>
-    <circle cx="10" cy="22" r="2"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 64 64">
+  <!-- Generator: Adobe Illustrator 29.8.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 2)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #0b1b3a;
+      }
 
-    <!-- 't' -->
-    <line x1="18" y1="28" x2="18" y2="44"/>
-    <line x1="14" y1="28" x2="22" y2="28"/>
+      .st1 {
+        fill: #fff;
+      }
 
-    <!-- 'z' -->
-    <line x1="24" y1="28" x2="32" y2="28"/>
-    <line x1="32" y1="28" x2="24" y2="44"/>
-    <line x1="24" y1="44" x2="32" y2="44"/>
+      .st1, .st2 {
+        stroke: #fff;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
 
-    <!-- 'T' (larger, right side) -->
-    <line x1="38" y1="18" x2="58" y2="18"/>
-    <line x1="48" y1="18" x2="48" y2="46"/>
+      .st1, .st2, .st3 {
+        stroke-width: 5px;
+      }
 
-    <!-- 'P' bowl sharing the T stem -->
-    <!-- Move from stem, draw top, arc a bowl, then back to stem -->
-    <path d="M48 24 H57 A7 7 0 0 1 57 38 H48" />
+      .st2, .st3 {
+        fill: none;
+      }
+
+      .st3 {
+        stroke: #ef4444;
+      }
+    </style>
+  </defs>
+  <rect class="st0" x="4" y="4" width="56" height="56" rx="12" ry="12"/>
+  <g>
+    <line class="st2" x1="10" y1="28" x2="10" y2="44"/>
+    <circle class="st1" cx="10" cy="22" r="3"/>
+    <line class="st2" x1="18" y1="28" x2="18" y2="44"/>
+    <line class="st2" x1="14" y1="28" x2="26" y2="28"/>
+    <line class="st2" x1="28" y1="28" x2="38" y2="28"/>
+    <line class="st2" x1="38" y1="28" x2="28" y2="44"/>
+    <line class="st2" x1="28" y1="44" x2="38" y2="44"/>
   </g>
+  <g>
+    <line class="st2" x1="34.64" y1="16" x2="52.64" y2="16"/>
+    <line class="st2" x1="43.64" y1="16" x2="43.64" y2="46"/>
+  </g>
+  <path class="st3" d="M50.01,38c3.83,0,6.93-3.13,6.93-7s-3.1-7-6.93-7h-8.91"/>
+  <line class="st3" x1="50.34" y1="38" x2="46.14" y2="38"/>
 </svg>

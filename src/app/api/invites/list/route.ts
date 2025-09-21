@@ -1,98 +1,96 @@
 // src/app/api/invites/list/route.ts
-// Owner-only: list recent invites for a league (pending first), schema-flexible.
-
 import { NextRequest } from "next/server";
-import { supabaseServer, jsonWithRes } from "@/lib/supabaseServer";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isUnknownColumn(err: any) {
-  const msg = String(err?.message || "").toLowerCase();
-  return msg.includes("column") && msg.includes("does not exist");
+/**
+ * GET /api/invites/list?leagueId=...
+ * - Auth required
+ * - Must be owner/admin of the league
+ * - Returns buckets: { open, accepted, denied } — always arrays
+ *
+ * We avoid Supabase generics (your project doesn't use generated DB types),
+ * and add small runtime guards so strict TS won't infer `never`.
+ */
+
+type LeagueMemberRow = { role: string | null };
+
+function isLeagueMemberRow(v: any): v is LeagueMemberRow {
+  return v && "role" in v;
 }
 
 export async function GET(req: NextRequest) {
-  const { client, response } = supabaseServer(req);
-  const u = new URL(req.url);
-  const league_id = (u.searchParams.get("league_id") || "").trim();
-  if (!league_id) return jsonWithRes(response, { ok: false, error: "league_id is required" }, 400);
+  const { client: sb, response } = supabaseRoute(req);
 
-  // auth
-  const { data: auth, error: authErr } = await client.auth.getUser();
-  const userId = auth?.user?.id ?? null;
-  if (authErr || !userId) return jsonWithRes(response, { ok: false, error: "Not authenticated." }, 401);
+  const url = new URL(req.url);
+  const leagueId = url.searchParams.get("leagueId");
 
-  // owner-only
-  const { data: league, error: leagueErr } = await client
-    .from("leagues")
-    .select("id, owner_id")
-    .eq("id", league_id)
-    .maybeSingle();
-  if (leagueErr) return jsonWithRes(response, { ok: false, error: leagueErr.message }, 500);
-  if (!league || league.owner_id !== userId) return jsonWithRes(response, { ok: false, error: "Forbidden" }, 403);
+  // Auth
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message, open: [], accepted: [], denied: [] }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized", open: [], accepted: [], denied: [] }, 401);
 
-  // Do separate queries and normalize to a single shape so TS is happy.
-  type Row = {
-    id: string;
-    email: string | null;
-    token: string;
-    is_public?: boolean | null;
-    accepted?: boolean | null;
-    accepted_at?: string | null;
-    created_at: string;
-    expires_at?: string | null;
-  };
-
-  let data: Row[] = [];
-  let err: any = null;
-
-  // Try modern schema
-  const modern = await client
-    .from("invites")
-    .select("id, email, token, is_public, accepted, accepted_at, created_at, expires_at")
-    .eq("league_id", league_id)
-    .order("created_at", { ascending: false })
-    .limit(200);
-
-  if (!modern.error) {
-    data = (modern.data ?? []) as Row[];
-  } else if (isUnknownColumn(modern.error)) {
-    // Fallback to legacy subset and add missing fields
-    const legacy = await client
-      .from("invites")
-      .select("id, email, token, accepted, created_at")
-      .eq("league_id", league_id)
-      .order("created_at", { ascending: false })
-      .limit(200);
-
-    if (legacy.error) {
-      err = legacy.error;
-    } else {
-      data = (legacy.data ?? []).map((r: any) => ({
-        ...r,
-        is_public: r.email == null,
-        accepted_at: null,
-        expires_at: null,
-      })) as Row[];
-    }
-  } else {
-    err = modern.error;
+  if (!leagueId) {
+    return jsonWithRes(response, { error: "leagueId is required", open: [], accepted: [], denied: [] }, 400);
   }
 
-  if (err) return jsonWithRes(response, { ok: false, error: err.message }, 500);
+  // Permission: must be owner/admin on this league
+  const lmRes: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
 
+  if (lmRes.error) {
+    return jsonWithRes(response, { error: lmRes.error.message, open: [], accepted: [], denied: [] }, 500);
+  }
+
+  const lmRaw = lmRes.data as unknown;
+  if (!isLeagueMemberRow(lmRaw)) {
+    return jsonWithRes(response, { error: "Forbidden", open: [], accepted: [], denied: [] }, 403);
+  }
+  const role = String(lmRaw.role || "").toLowerCase();
+  const canManage = role === "owner" || role === "admin";
+  if (!canManage) {
+    return jsonWithRes(response, { error: "Forbidden", open: [], accepted: [], denied: [] }, 403);
+  }
+
+  // Fetch invites (no generics)
+  const invRes: any = await sb
+    .from("invites")
+    .select(
+      "id, league_id, email, token, created_at, expires_at, accepted, accepted_at, revoked_at, is_public"
+    )
+    .eq("league_id", leagueId)
+    .order("created_at", { ascending: false });
+
+  if (invRes.error) {
+    return jsonWithRes(response, { error: invRes.error.message, open: [], accepted: [], denied: [] }, 400);
+  }
+
+  const list: any[] = Array.isArray(invRes.data) ? (invRes.data as any[]) : [];
   const nowIso = new Date().toISOString();
-  const rows = data.map((r) => ({
-    id: r.id,
-    email: r.email ?? null,
-    token: r.token,
-    is_public: "is_public" in r ? !!r.is_public : r.email == null,
-    created_at: r.created_at,
-    expires_at: "expires_at" in r ? (r.expires_at ?? null) : null,
-    accepted: !!(r.accepted || r.accepted_at),
-    pending: !(r.accepted || r.accepted_at) && (!r.expires_at || r.expires_at > nowIso),
-  }));
 
-  return jsonWithRes(response, { ok: true, invites: rows }, 200);
+  // Helpers (avoid TS property errors by reading via any)
+  const isAccepted = (i: any) => Boolean(i?.accepted) || Boolean(i?.accepted_at);
+  const isRevoked = (i: any) => Boolean(i?.revoked_at);
+  const hasExpiry = (i: any) => Boolean(i?.expires_at);
+  const isExpired = (i: any) => {
+    const ex = i?.expires_at ? String(i.expires_at) : "";
+    return !ex || ex <= nowIso;
+  };
+
+  const open = list.filter(
+    (i) => !isAccepted(i) && !isRevoked(i) && hasExpiry(i) && !isExpired(i)
+  );
+  const accepted = list.filter((i) => isAccepted(i));
+  const denied = list.filter((i) => !isAccepted(i) && (isRevoked(i) || isExpired(i)));
+
+  return jsonWithRes(response, { ok: true, open, accepted, denied });
 }

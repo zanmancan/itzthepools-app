@@ -1,77 +1,48 @@
 // src/app/api/league-name/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Body = { league_id?: string; name?: string };
-
-/** Return JSON while preserving Set-Cookie headers carried on `res`. */
-function json(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
+/**
+ * POST /api/league-name
+ * Body: { leagueId: string, name: string }
+ * Renames a league (owner/admin only).
+ */
 export async function POST(req: NextRequest) {
-  // Initialize cookie-bound Supabase client and a response shell
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
-  }
+  const { client: sb, response } = supabaseRoute(req);
 
-  try {
-    // Parse body safely
-    let league_id: string | undefined;
-    let name: string | undefined;
-    try {
-      const body = (await req.json()) as Body;
-      league_id = body.league_id?.trim();
-      name = body.name?.trim();
-    } catch {
-      // ignored; handled by validation below
-    }
+  const { leagueId, name }: { leagueId?: string; name?: string } = await req.json().catch(() => ({} as any));
+  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
+  const clean = String(name || "").trim();
+  if (!clean) return jsonWithRes(response, { error: "name is required" }, 400);
 
-    if (!league_id || !name) {
-      return json(res, { error: "league_id and name required" }, 400);
-    }
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
 
-    // Auth
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
+  const lmRes: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-    // Must be owner/admin
-    const { data: lm } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
-      .maybeSingle();
+  if (lmRes.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
+  const role = String(lmRes?.data?.role || "").toLowerCase();
+  if (!(role === "owner" || role === "admin")) return jsonWithRes(response, { error: "Forbidden" }, 403);
 
-    if (!lm || !["owner", "admin"].includes(lm.role as any)) {
-      return json(res, { error: "Forbidden" }, 403);
-    }
+  const upd: any = await (sb.from("leagues") as any)
+    .update({ name: clean })
+    .eq("id", leagueId)
+    .select()
+    .maybeSingle?.();
 
-    // Update league name
-    const { error } = await sb.from("leagues").update({ name }).eq("id", league_id);
-    if (error) return json(res, { error: error.message }, 400);
+  if (upd?.error) return jsonWithRes(response, { error: upd.error.message }, 400);
 
-    return json(res, { ok: true });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
-  }
+  return jsonWithRes(response, { ok: true, league: upd?.data ?? null });
 }

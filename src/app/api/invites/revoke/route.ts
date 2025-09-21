@@ -1,96 +1,78 @@
 // src/app/api/invites/revoke/route.ts
 import { NextRequest } from "next/server";
-import { supabaseServer, jsonWithRes } from "@/lib/supabaseServer";
-import { devlog, deverror } from "@/lib/devlog";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Body = { id?: string | null; token?: string | null; reason?: string | null };
+type InviteRow = {
+  id: string;
+  league_id: string;
+  accepted: boolean | null;
+  revoked_at: string | null;
+};
+
+type LeagueMemberRow = { role: string | null };
+type Body = { id?: string | null };
+
+function isInviteRow(v: any): v is InviteRow {
+  return v && typeof v.id === "string" && typeof v.league_id === "string";
+}
+
+function isLeagueMemberRow(v: any): v is LeagueMemberRow {
+  return v && "role" in v;
+}
 
 export async function POST(req: NextRequest) {
-  const { client: sb, response: res } = supabaseServer(req);
+  const { client: sb, response: res } = supabaseRoute(req);
 
-  // 1) Auth
+  // auth
   const {
     data: { user },
     error: uerr,
   } = await sb.auth.getUser();
-  if (uerr || !user) return jsonWithRes(res, { error: "Not authenticated." }, 401);
+  if (uerr) return jsonWithRes(res, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(res, { error: "Unauthorized" }, 401);
 
-  // 2) Parse body
-  let id: string | undefined;
-  let token: string | undefined;
-  let reason: string | null = null;
+  const { id }: Body = await req.json().catch(() => ({} as Body));
+  if (!id) return jsonWithRes(res, { error: "Missing invite id" }, 400);
 
-  try {
-    const body = (await req.json()) as Body;
-    id = typeof body?.id === "string" ? body.id.trim() : undefined;
-    token = typeof body?.token === "string" ? body.token.trim() : undefined;
-    reason =
-      typeof body?.reason === "string"
-        ? body.reason.trim().slice(0, 180) // keep concise
-        : null;
-  } catch {
-    /* ignore parse errors – handled below */
-  }
-
-  if (!id && !token) {
-    return jsonWithRes(res, { error: "id or token is required." }, 400);
-  }
-
-  // 3) Load invite (await the query; do NOT pass the builder around)
-  const baseSel = sb
+  // Invite — no generics; validate then cast
+  const { data: invRaw, error: invErr } = await sb
     .from("invites")
-    .select("id, league_id, invited_by, accepted, revoked_at")
-    .limit(1);
+    .select("id,league_id,accepted,revoked_at")
+    .eq("id", id)
+    .maybeSingle();
 
-  const q = id ? baseSel.eq("id", id) : baseSel.eq("token", token!);
-  const { data: inv, error: selErr } = await q.maybeSingle();
+  if (invErr) return jsonWithRes(res, { error: invErr.message }, 400);
+  if (!isInviteRow(invRaw)) return jsonWithRes(res, { error: "Invite not found" }, 404);
+  const inv = invRaw as InviteRow;
 
-  if (selErr) {
-    deverror("[invite:revoke] load failed", selErr);
-    return jsonWithRes(res, { error: "Failed to load invite." }, 500);
-  }
-  if (!inv) return jsonWithRes(res, { error: "Invite not found." }, 404);
+  if (inv.accepted) return jsonWithRes(res, { error: "Invite already accepted" }, 409);
+  if (inv.revoked_at) return jsonWithRes(res, { ok: true, alreadyRevoked: true }, 200);
 
-  if (inv.accepted) {
-    // already used → conflict
-    return jsonWithRes(res, { error: "Invite already accepted." }, 409);
-  }
-  if (inv.revoked_at) {
-    // idempotent: say OK and tell the caller it was already revoked
-    return jsonWithRes(res, { ok: true, alreadyRevoked: true }, 200);
-  }
-
-  // 4) Permission: league owner/admin OR the original inviter
-  const { data: lm } = await sb
+  // Permission check — treat raw as any so TS doesn't produce `never`, then validate.
+  const lmRes: any = await sb
     .from("league_members")
     .select("role")
     .eq("league_id", inv.league_id)
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const canRevoke =
-    (lm && ["owner", "admin"].includes(lm.role as any)) ||
-    inv.invited_by === user.id;
+  if (lmRes.error) return jsonWithRes(res, { error: lmRes.error.message }, 500);
+  const lmRaw = lmRes.data as unknown;
 
+  if (!isLeagueMemberRow(lmRaw)) return jsonWithRes(res, { error: "Forbidden" }, 403);
+  const role = String(lmRaw.role || "").toLowerCase();
+  const canRevoke = role === "owner" || role === "admin";
   if (!canRevoke) return jsonWithRes(res, { error: "Forbidden" }, 403);
 
-  // 5) Revoke (guarded: not accepted and not already revoked)
-  const now = new Date().toISOString();
-  const { error: updErr } = await sb
-    .from("invites")
-    .update({ revoked_at: now, revoked_by: user.id, revoked_reason: reason })
-    .eq("id", inv.id)
-    .is("revoked_at", null)
-    .eq("accepted", false);
+  // Revoke — cast this call chain to any so update payload isn't `never`
+  const updRes: any = await (sb.from("invites") as any)
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", inv.id);
 
-  if (updErr) {
-    deverror("[invite:revoke] update failed", updErr, { invite_id: inv.id });
-    return jsonWithRes(res, { error: "Failed to revoke invite." }, 500);
-  }
+  if (updRes.error) return jsonWithRes(res, { error: updRes.error.message }, 400);
 
-  devlog("[invite:revoke] success", { invite_id: inv.id, reason });
-  return jsonWithRes(res, { ok: true, revoked_at: now }, 200);
+  return jsonWithRes(res, { ok: true }, 200);
 }

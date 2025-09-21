@@ -1,117 +1,119 @@
+// src/lib/supabaseServer.ts
+// Unified Supabase helpers for App Router (API routes + Server Components)
+
 import { NextRequest, NextResponse } from "next/server";
-import { cookies as nextCookies } from "next/headers";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { headers, cookies } from "next/headers"; // ✅ headers() & cookies() both come from next/headers
+import { createServerClient } from "@supabase/ssr";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Trimmed env getter so stray whitespace doesn't break keys
-function reqEnv(name: string) {
-  let v = process.env[name];
-  if (!v) throw new Error(`[env] Missing ${name}`);
-  v = v.trim();
-  if (!v) throw new Error(`[env] Empty after trim: ${name}`);
-  return v;
-}
-
-type AnyCookieOptions = CookieOptions | any;
-
-// Cookie adapter used in Route Handlers
-function cookieAdapterForRoute(req: NextRequest, res: NextResponse) {
-  return {
-    get(name: string) {
-      return req.cookies.get(name)?.value;
-    },
-    getAll() {
-      return req.cookies.getAll().map(({ name, value }) => ({ name, value }));
-    },
-    set(name: string, value: string, options: AnyCookieOptions = {}) {
-      try { res.cookies.set({ name, value, ...(options ?? {}) }); } catch {}
-    },
-    remove(name: string, options: AnyCookieOptions = {}) {
-      try { res.cookies.set({ name, value: "", ...(options ?? {}), maxAge: 0 }); } catch {}
-    },
-  } as any;
-}
-
-// Cookie adapter used in RSC/layout/page (no NextRequest available)
-function cookieAdapterForRSC(res: NextResponse) {
-  const store = nextCookies();
-  return {
-    get(name: string) { return store.get(name)?.value; },
-    getAll() { return store.getAll().map(({ name, value }) => ({ name, value })); },
-    set(name: string, value: string, options: AnyCookieOptions = {}) {
-      try { res.cookies.set({ name, value, ...(options ?? {}) }); } catch {}
-    },
-    remove(name: string, options: AnyCookieOptions = {}) {
-      try { res.cookies.set({ name, value: "", ...(options ?? {}), maxAge: 0 }); } catch {}
-    },
-  } as any;
-}
-
-/**
- * OVERLOADS
- * =========
- * supabaseServer()                    -> SupabaseClient           (for pages/RSC) [ANON]
- * supabaseServer(req: NextRequest)    -> { client, response, url } (for Route Handlers) [ANON]
- */
-export function supabaseServer(): SupabaseClient<any, "public", any>;
-export function supabaseServer(
-  req: NextRequest
-): { client: SupabaseClient<any, "public", any>; response: NextResponse; url: URL };
-export function supabaseServer(req?: NextRequest) {
-  const res = new NextResponse(null, { headers: new Headers() });
-  const cookiesAdapter = req ? cookieAdapterForRoute(req, res) : cookieAdapterForRSC(res);
+/* =========================
+ * API routes: bind client to req/res for cookie passthrough
+ * ========================= */
+export function supabaseRoute(req: NextRequest): {
+  client: ReturnType<typeof createServerClient>;
+  response: NextResponse;
+} {
+  const res = NextResponse.next();
 
   const client = createServerClient(
-    reqEnv("NEXT_PUBLIC_SUPABASE_URL"),
-    reqEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
-    { cookies: cookiesAdapter }
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get: (name: string) => req.cookies.get(name)?.value,
+        set: (name: string, value: string, options: any) => {
+          res.cookies.set({ name, value, ...options });
+        },
+        remove: (name: string, options: any) => {
+          res.cookies.set({ name, value: "", ...options, maxAge: 0 });
+        },
+      },
+    }
   );
 
-  if (!req) return client; // Pages/RSC usage
-  return { client, response: res, url: new URL(req.url) }; // Route handler usage
+  return { client, response: res };
 }
 
-/** Back-compat alias */
-export function supabaseRoute(req: NextRequest) {
-  return supabaseServer(req);
+/* =========================
+ * Return JSON and forward any Set-Cookie headers Supabase wrote to our temp response
+ * ========================= */
+export function jsonWithRes(res: NextResponse, body: any, status = 200, init?: ResponseInit) {
+  const out = NextResponse.json(body, { status, ...init });
+  // forward cookies that were set on the intermediary response
+  res.headers.forEach((v, k) => {
+    if (k.toLowerCase() === "set-cookie") out.headers.append("set-cookie", v);
+  });
+  return out;
 }
 
-/** Server-only service-role client (webhooks/cron) */
-export function supabaseService(): SupabaseClient<any, "public", any> {
-  const url = reqEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const serviceKey = reqEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, serviceKey, {
+/* =========================
+ * Server Components: read-only cookies via next/headers
+ * ========================= */
+export function createSbServer() {
+  const cookieStore = cookies();
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get: (name: string) => cookieStore.get(name)?.value,
+        set() {
+          /* no-op in server components */
+        },
+        remove() {
+          /* no-op in server components */
+        },
+      },
+    }
+  );
+}
+
+/* Back-compat alias (some files import this name) */
+export function supabaseServer() {
+  return createSbServer();
+}
+
+/* =========================
+ * Service-role client (SERVER ONLY)
+ * Uses SUPABASE_SERVICE_ROLE_KEY — never expose to client code.
+ * ========================= */
+export function supabaseService(): SupabaseClient {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { "X-Client-Info": "itzthepools-service" } },
   });
 }
 
-export default supabaseServer;
+/* =========================
+ * absoluteUrl — builds a full URL for emails/links and API callbacks
+ * Priority:
+ *  1) NEXT_PUBLIC_SITE_URL (use full https://host)
+ *  2) VERCEL_URL / RENDER_EXTERNAL_URL (host only)
+ *  3) request Host header (when available)
+ *  4) http://localhost:3000
+ * ========================= */
+export function absoluteUrl(path = "/"): string {
+  const envUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+    (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}` : null);
 
-/** Build absolute URL preferring env (Netlify) then request origin. */
-export function absoluteUrl(reqOrUrl: NextRequest | URL | undefined, path: string) {
-  const envOrigin =
-    process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SUPABASE_SITE_URL;
-  if (envOrigin) return new URL(path, envOrigin).toString();
+  let base = envUrl;
+  if (!base) {
+    // try current request host if called server-side during a request
+    try {
+      const h = headers();
+      const host = h.get("x-forwarded-host") || h.get("host");
+      const proto = h.get("x-forwarded-proto") || "http";
+      if (host) base = `${proto}://${host}`;
+    } catch {
+      // headers() not available (e.g., build time)
+    }
+  }
+  if (!base) base = "http://localhost:3000";
 
-  const u =
-    reqOrUrl instanceof URL
-      ? reqOrUrl
-      : reqOrUrl && "nextUrl" in (reqOrUrl as any)
-      ? (reqOrUrl as NextRequest).nextUrl
-      : undefined;
-
-  const origin = u ? `${u.protocol}//${u.host}` : "http://localhost";
-  return new URL(path, origin).toString();
-}
-
-/** JSON response that forwards any cookies gathered on `base`. */
-export function jsonWithRes(base: NextResponse, body: unknown, init?: number | ResponseInit) {
-  const status =
-    typeof init === "number" ? init : (init as ResponseInit | undefined)?.status ?? 200;
-  const initObj = typeof init === "object" && init ? init : undefined;
-
-  const out = NextResponse.json(body, { status, ...initObj });
-  try { base.cookies.getAll().forEach((c) => out.cookies.set(c)); } catch {}
-  return out;
+  // Ensure single leading slash on path
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return new URL(p, base).toString();
 }

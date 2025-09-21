@@ -3,10 +3,9 @@
 
 /**
  * InvitesPanel
- * - Fetches invites for a given league and buckets them into:
- *   open, accepted, denied (revoked or expired)
- * - Renders three collapsible sections with counts.
- * - Strong error handling: UI never explodes if API changes or fails.
+ * - Renders Open / Accepted / Denied buckets
+ * - Adds "Revoke" button for Open invites (owner/admin only)
+ * - Strong error handling
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -15,8 +14,8 @@ export type InviteRow = {
   id: string;
   token: string;
   email: string | null;
-  isPublic?: boolean | null; // tolerate either isPublic or is_public from API
   is_public?: boolean | null;
+  isPublic?: boolean | null;
   created_at: string | null;
   expires_at: string | null;
   accepted_at?: string | null;
@@ -25,23 +24,10 @@ export type InviteRow = {
 };
 
 type ApiResponse =
-  | {
-      ok: true;
-      open: InviteRow[];
-      accepted: InviteRow[];
-      denied: InviteRow[];
-    }
-  | {
-      ok?: false;
-      error?: string;
-      open?: InviteRow[];
-      accepted?: InviteRow[];
-      denied?: InviteRow[];
-    };
+  | { ok: true; open: InviteRow[]; accepted: InviteRow[]; denied: InviteRow[] }
+  | { ok?: false; error?: string; open?: InviteRow[]; accepted?: InviteRow[]; denied?: InviteRow[] };
 
-type Props = { leagueId: string };
-
-export default function InvitesPanel({ leagueId }: Props) {
+export default function InvitesPanel({ leagueId, canManage = true }: { leagueId: string; canManage?: boolean }) {
   const [data, setData] = useState<{ open: InviteRow[]; accepted: InviteRow[]; denied: InviteRow[] }>({
     open: [],
     accepted: [],
@@ -49,44 +35,26 @@ export default function InvitesPanel({ leagueId }: Props) {
   });
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   async function fetchInvites() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/leagues/${leagueId}/invites`, {
-        cache: "no-store",
-      });
-
-      // Try to parse JSON; if it fails, treat as empty arrays
-      let body: ApiResponse | null = null;
-      try {
-        body = (await res.json()) as ApiResponse;
-      } catch {
-        body = null;
-      }
-
+      const res = await fetch(`/api/leagues/${leagueId}/invites`, { cache: "no-store" });
+      const body: ApiResponse = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        const msg = (body && "error" in body && body?.error) || `HTTP ${res.status}`;
-        setError(`Failed to load invites: ${msg}`);
+        setError((body as any)?.error || `HTTP ${res.status}`);
         setData({ open: [], accepted: [], denied: [] });
         return;
       }
-
-      // Normalize buckets and always return arrays
-      const open = Array.isArray(body?.open) ? body!.open : [];
-      const accepted = Array.isArray(body?.accepted) ? body!.accepted : [];
-      // Server might call this "revoked" historically — accept both
-      const deniedFallback: InviteRow[] =
-        Array.isArray((body as any)?.denied)
-          ? (body as any).denied
-          : Array.isArray((body as any)?.revoked)
-          ? (body as any).revoked
-          : [];
-
-      setData({ open, accepted, denied: deniedFallback });
+      setData({
+        open: Array.isArray(body.open) ? body.open : [],
+        accepted: Array.isArray(body.accepted) ? body.accepted : [],
+        denied: Array.isArray((body as any).denied) ? (body as any).denied : [],
+      });
     } catch (e: any) {
-      setError(`Unexpected error: ${e?.message || String(e)}`);
+      setError(e?.message || String(e));
       setData({ open: [], accepted: [], denied: [] });
     } finally {
       setLoading(false);
@@ -98,6 +66,27 @@ export default function InvitesPanel({ leagueId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueId]);
 
+  async function revokeInvite(id: string) {
+    setBusyId(id);
+    try {
+      const res = await fetch("/api/invites/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(`Revoke failed: ${(body && body.error) || `HTTP ${res.status}`}`);
+        return;
+      }
+      await fetchInvites();
+    } catch (e: any) {
+      alert(`Revoke failed: ${e?.message || String(e)}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const counters = useMemo(
     () => ({
       open: data.open?.length ?? 0,
@@ -108,31 +97,48 @@ export default function InvitesPanel({ leagueId }: Props) {
   );
 
   return (
-    <div className="rounded-lg border border-gray-700 bg-black/20 p-4">
+    <div className="rounded-lg border border-gray-800 bg-black/20 p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Invites</h3>
-        <ReloadButton onClick={() => void fetchInvites()} busy={loading} />
+        <div className="text-sm font-medium text-gray-300">Invites</div>
+        <button
+          type="button"
+          onClick={() => void fetchInvites()}
+          disabled={loading}
+          className="rounded bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700 disabled:opacity-50"
+        >
+          {loading ? "Loading…" : "Reload"}
+        </button>
       </div>
 
-      {error && <ErrorBox message={error} />}
+      {error && (
+        <div className="mb-4 rounded-md border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
+          <div className="font-semibold">There was a problem loading invites.</div>
+          <div className="mt-1 leading-snug">{error}</div>
+        </div>
+      )}
 
-      <Section title={`Open (${counters.open})`} defaultOpen>
-        <Table rows={data.open} empty="No open invites." />
-      </Section>
+      <Details title={`Open (${counters.open})`} defaultOpen>
+        <Table
+          rows={data.open}
+          empty="No open invites."
+          showRevoke={canManage}
+          onRevoke={(id) => void revokeInvite(id)}
+          busyId={busyId}
+        />
+      </Details>
 
-      <Section title={`Accepted (${counters.accepted})`}>
+      <Details title={`Accepted (${counters.accepted})`}>
         <Table rows={data.accepted} empty="No accepted invites yet." />
-      </Section>
+      </Details>
 
-      <Section title={`Denied / Expired (${counters.denied})`}>
+      <Details title={`Denied / Expired (${counters.denied})`}>
         <Table rows={data.denied} empty="No denied/expired invites." />
-      </Section>
+      </Details>
     </div>
   );
 }
 
-/** Collapsible section built on <details> for simplicity and reliability */
-function Section({
+function Details({
   title,
   children,
   defaultOpen = false,
@@ -151,33 +157,20 @@ function Section({
   );
 }
 
-function ErrorBox({ message }: { message: string }) {
-  return (
-    <div className="mb-4 rounded-md border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
-      <div className="font-semibold">There was a problem loading invites.</div>
-      <div className="mt-1 leading-snug">{message}</div>
-    </div>
-  );
-}
-
-function ReloadButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      className="rounded bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700 disabled:opacity-50"
-      title="Reload"
-    >
-      {busy ? "Loading…" : "Reload"}
-    </button>
-  );
-}
-
-function Table({ rows, empty }: { rows: InviteRow[]; empty: string }) {
-  if (!rows || rows.length === 0) {
-    return <div className="text-sm text-gray-400">{empty}</div>;
-  }
+function Table({
+  rows,
+  empty,
+  showRevoke = false,
+  onRevoke,
+  busyId,
+}: {
+  rows: InviteRow[];
+  empty: string;
+  showRevoke?: boolean;
+  onRevoke?: (id: string) => void;
+  busyId?: string | null;
+}) {
+  if (!rows || rows.length === 0) return <div className="text-sm text-gray-400">{empty}</div>;
 
   return (
     <div className="overflow-x-auto">
@@ -189,12 +182,14 @@ function Table({ rows, empty }: { rows: InviteRow[]; empty: string }) {
             <th className="py-1 pr-3">Expires</th>
             <th className="py-1 pr-3">Type</th>
             <th className="py-1 pr-3">Link</th>
+            {showRevoke && <th className="py-1 pr-3 text-right">Actions</th>}
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => {
             const pub = (r.isPublic ?? r.is_public) ? true : false;
             const inviteUrl = `/invite/${r.token}`;
+            const isBusy = busyId === r.id;
             return (
               <tr key={r.id} className="border-b border-gray-900/40">
                 <td className="py-1 pr-3 text-gray-300">{fmtDateTime(r.created_at)}</td>
@@ -204,6 +199,18 @@ function Table({ rows, empty }: { rows: InviteRow[]; empty: string }) {
                 <td className="py-1 pr-3">
                   <CopyButton text={inviteUrl} label="Copy" />
                 </td>
+                {showRevoke && (
+                  <td className="py-1 pr-3 text-right">
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onRevoke && onRevoke(r.id)}
+                      className="rounded bg-red-900/50 px-2 py-0.5 text-xs text-red-100 hover:bg-red-800 disabled:opacity-50"
+                    >
+                      {isBusy ? "Revoking…" : "Revoke"}
+                    </button>
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -218,10 +225,8 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
     try {
       const value = text.startsWith("http") ? text : `${location.origin}${text}`;
       await navigator.clipboard.writeText(value);
-      // eslint-disable-next-line no-alert
       alert("Invite link copied to clipboard.");
     } catch (e: any) {
-      // eslint-disable-next-line no-alert
       alert(`Copy failed: ${e?.message || String(e)}`);
     }
   }
@@ -241,7 +246,6 @@ function fmtDateTime(v: string | null): string {
   try {
     const d = new Date(v);
     if (Number.isNaN(+d)) return v;
-    // show local date & short time
     return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   } catch {
     return v;

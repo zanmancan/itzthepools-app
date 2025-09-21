@@ -1,147 +1,70 @@
 // src/app/api/invites/create/route.ts
 import { NextRequest } from "next/server";
-import { supabaseServer, jsonWithRes, absoluteUrl } from "@/lib/supabaseServer";
-import { devlog, devtime, devtimeEnd, deverror } from "@/lib/devlog";
-import crypto from "node:crypto";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Adjust as needed; we chose a higher ceiling per your note
-const LIMIT_PER_MIN = 30;
-
-type PostBody = {
-  league_id?: string;
-  email?: string | null;
-  isPublic?: boolean;
-};
-
-function isValidEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
+/**
+ * POST /api/invites/create
+ * Body: { leagueId: string; email?: string; public?: boolean; days?: number }
+ * - email provided  -> email invite
+ * - public === true -> public link invite (no email)
+ */
 export async function POST(req: NextRequest) {
-  const { client: sb, response: res, url } = supabaseServer(req);
+  const { client: sb, response } = supabaseRoute(req);
 
-  // 1) Parse & validate
-  let body: PostBody;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonWithRes(res, { error: "Invalid JSON body." }, 400);
-  }
+  const {
+    leagueId,
+    email: rawEmail,
+    public: asPublic,
+    days,
+  }: { leagueId?: string; email?: string; public?: boolean; days?: number } = await req
+    .json()
+    .catch(() => ({} as any));
 
-  const league_id = typeof body.league_id === "string" ? body.league_id.trim() : "";
-  const isPublic = Boolean(body.isPublic);
-  const email =
-    body.email === null
-      ? null
-      : typeof body.email === "string"
-      ? body.email.trim()
-      : undefined;
+  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
 
-  if (!league_id) return jsonWithRes(res, { error: "league_id is required." }, 400);
-  if (!isPublic) {
-    if (!email) return jsonWithRes(res, { error: "email is required." }, 400);
-    if (!isValidEmail(email)) return jsonWithRes(res, { error: "email is invalid." }, 400);
-  }
+  const email = (rawEmail || "").trim();
+  const isPublic = Boolean(asPublic);
 
-  // 2) Require auth
+  if (!isPublic && !email) return jsonWithRes(response, { error: "Provide email or set public=true" }, 400);
+
   const {
     data: { user },
-    error: authError,
+    error: uerr,
   } = await sb.auth.getUser();
-  if (authError || !user) return jsonWithRes(res, { error: "Not authenticated." }, 401);
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
 
-  devlog("[invites:create] request", { league_id, isPublic, email, user: user.id });
-
-  // 3) Owner-only check (your schema has leagues.owner_id)
-  const { data: league, error: leagueErr } = await sb
-    .from("leagues")
-    .select("id, owner_id")
-    .eq("id", league_id)
+  const lmRes: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
     .maybeSingle();
+  if (lmRes?.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
 
-  if (leagueErr) {
-    deverror("[invites:create] verify ownership failed", leagueErr);
-    return jsonWithRes(
-      res,
-      { error: "Failed to verify league ownership.", detail: leagueErr.message },
-      500
-    );
-  }
-  if (!league || league.owner_id !== user.id) {
-    devlog("[invites:create] forbidden (owner only)", { league_id, owner: league?.owner_id, user: user.id });
-    return jsonWithRes(res, { error: "Forbidden (owner only)." }, 403);
-  }
+  const role = String(lmRes?.data?.role || "").toLowerCase();
+  if (!(role === "owner" || role === "admin")) return jsonWithRes(response, { error: "Forbidden" }, 403);
 
-  // 4) Lightweight per-minute rate limit (by inviter)
-  devtime("invites:create:ratelimit");
-  const { count: recentCount, error: countErr } = await sb
-    .from("invites")
-    .select("id", { count: "exact", head: true })
-    .eq("invited_by", user.id)
-    .gt("created_at", new Date(Date.now() - 60_000).toISOString());
+  const ttlDays = Number.isFinite(days) && days! > 0 ? days! : 7;
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
 
-  devtimeEnd("invites:create:ratelimit");
-  if (countErr) {
-    deverror("[invites:create] rate-limit count failed", countErr);
-    return jsonWithRes(res, { error: "Rate-limit check failed." }, 500);
-  }
-  if ((recentCount ?? 0) >= LIMIT_PER_MIN) {
-    devlog("[invites:create] rate-limited", { recentCount, LIMIT_PER_MIN });
-    return jsonWithRes(
-      res,
-      { error: `Invite limit reached. Try again in a minute. (${LIMIT_PER_MIN}/min)` },
-      429
-    );
-  }
-
-  // 5) Insert invite — "public" means email is NULL in your schema
-  const token = crypto.randomUUID().replace(/-/g, "");
-  const payload = {
-    league_id,
-    email: isPublic ? null : String(email).toLowerCase(),
-    token,
+  const row = {
+    league_id: leagueId,
+    email: isPublic ? null : email,
+    token: crypto.randomUUID().replace(/-/g, ""),
     invited_by: user.id,
+    accepted: false,
+    created_at: new Date().toISOString(),
+    expires_at: expiresAt,
+    revoked_at: null,
+    is_public: isPublic,
   };
 
-  devtime("invites:create:insert");
-  const { data: invite, error: insertErr } = await sb
-    .from("invites")
-    .insert(payload)
-    .select("id, token")
-    .single();
-  devtimeEnd("invites:create:insert");
+  const insRes: any = await (sb.from("invites") as any).insert(row).select().maybeSingle?.();
+  if (insRes?.error) return jsonWithRes(response, { error: insRes.error.message }, 400);
 
-  if (insertErr) {
-    deverror("[invites:create] insert failed", insertErr, { payload });
-    return jsonWithRes(
-      res,
-      {
-        error: "Failed to create invite.",
-        code: insertErr.code,
-        details: insertErr.details,
-        hint: insertErr.hint,
-        message: insertErr.message,
-      },
-      500
-    );
-  }
-
-  // 6) Build and return link
-  const inviteUrl = absoluteUrl(url, `/invite/${invite.token}`);
-  devlog("[invites:create] success", { invite_id: invite.id, token: invite.token });
-
-  return jsonWithRes(
-    res,
-    {
-      id: invite.id,
-      url: inviteUrl,       // primary
-      acceptUrl: inviteUrl, // some UIs expect this
-      link: inviteUrl,      // some UIs expect this
-      token,                // handy for debug
-    },
-    200
-  );
+  return jsonWithRes(response, { ok: true, invite: insRes?.data ?? null });
 }

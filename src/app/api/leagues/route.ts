@@ -1,104 +1,120 @@
 // src/app/api/leagues/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Helper that preserves Set-Cookie headers coming from the Supabase client */
-function json(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
-/** GET → leagues for current user */
-export async function GET(req: NextRequest) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
-  }
-
-  try {
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
-
-    const { data, error } = await sb
-      .from("league_members")
-      .select("role, leagues:league_id ( id, name, season, ruleset, is_public )")
-      .eq("user_id", user.id)
-      .order("role", { ascending: true });
-
-    if (error) return json(res, { error: error.message }, 400);
-    return json(res, { ok: true, rows: data ?? [] });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
-  }
-}
-
-/** POST { name, season?, ruleset?, is_public? } → create league + owner membership */
+/**
+ * POST /api/leagues
+ * Body: { name: string; season?: string; ruleset?: string; is_public?: boolean }
+ *
+ * Creates a league and sets the current user as OWNER.
+ * Notes:
+ * - No Supabase generics (avoids `never` types in strict TS)
+ * - Clear validation & error messages
+ */
 export async function POST(req: NextRequest) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
+  const { client: sb, response } = supabaseRoute(req);
+
+  // Auth
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
+
+  // Parse + validate
+  const body = (await req.json().catch(() => ({} as any))) as {
+    name?: string;
+    season?: string;
+    ruleset?: string;
+    is_public?: boolean;
+  };
+
+  const name = String(body?.name || "").trim();
+  if (!name) return jsonWithRes(response, { error: "name is required" }, 400);
+
+  const season = String(body?.season || "").trim() || new Date().getFullYear().toString();
+  const ruleset = body?.ruleset ? String(body.ruleset) : null;
+  const is_public = Boolean(body?.is_public);
+
+  // Insert league (avoid generics; cast only at call edge)
+  const leagueRow = {
+    name,
+    season,
+    ruleset,
+    is_public,
+    created_at: new Date().toISOString(),
+    created_by: user.id,
+  };
+
+  const insLeague: any = await (sb.from("leagues") as any)
+    .insert(leagueRow)
+    .select("id, name, season, ruleset, is_public")
+    .maybeSingle?.();
+
+  if (insLeague?.error) return jsonWithRes(response, { error: insLeague.error.message }, 400);
+
+  const league = insLeague?.data;
+  if (!league?.id) return jsonWithRes(response, { error: "Failed to create league" }, 500);
+
+  // Ensure owner membership exists
+  const insMember: any = await (sb.from("league_members") as any)
+    .insert({
+      league_id: league.id,
+      user_id: user.id,
+      role: "owner",
+      created_at: new Date().toISOString(),
+    })
+    .select("league_id, user_id, role")
+    .maybeSingle?.();
+
+  if (insMember?.error) {
+    // best-effort cleanup if membership failed
+    await (sb.from("leagues") as any).delete().eq("id", league.id);
+    return jsonWithRes(response, { error: insMember.error.message }, 400);
   }
 
-  try {
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
+  return jsonWithRes(response, { ok: true, league });
+}
 
-    const body = (await req.json().catch(() => ({} as any))) as {
-      name?: string;
-      season?: string | null;
-      ruleset?: string | null;
-      is_public?: boolean;
-    };
+/**
+ * GET /api/leagues
+ * Returns the leagues for the current user with their role.
+ */
+export async function GET(req: NextRequest) {
+  const { client: sb, response } = supabaseRoute(req);
 
-    const name = (body.name ?? "").trim();
-    const season = (body.season ?? null) as string | null;
-    const ruleset = (body.ruleset ?? null) as string | null;
-    const is_public = Boolean(body.is_public ?? false);
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message, leagues: [] }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized", leagues: [] }, 401);
 
-    if (!name) return json(res, { error: "name required" }, 400);
+  const q: any = await sb
+    .from("league_members")
+    .select("role, leagues:league_id(id, name, season, ruleset, is_public)")
+    .eq("user_id", user.id);
 
-    const { data: league, error: insErr } = await sb
-      .from("leagues")
-      .insert({ name, season, ruleset, is_public })
-      .select("id, name, season, ruleset, is_public")
-      .single();
+  if (q?.error) return jsonWithRes(response, { error: q.error.message, leagues: [] }, 400);
 
-    if (insErr) return json(res, { error: insErr.message }, 400);
+  const rows = Array.isArray(q.data) ? q.data : [];
+  const leagues = rows
+    .map((r: any) => ({
+      id: r?.leagues?.id,
+      name: r?.leagues?.name,
+      season: r?.leagues?.season,
+      ruleset: r?.leagues?.ruleset ?? null,
+      is_public: !!r?.leagues?.is_public,
+      role: String(r?.role || "member").toLowerCase(),
+    }))
+    .filter((x: any) => x.id);
 
-    const { error: memErr } = await sb
-      .from("league_members")
-      .insert({ league_id: league.id, user_id: user.id, role: "owner" });
+  // Sort for a stable UI
+  leagues.sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || "")));
 
-    if (memErr) return json(res, { error: `membership failed: ${memErr.message}` }, 400);
-
-    return json(res, { ok: true, league });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
-  }
+  return jsonWithRes(response, { ok: true, leagues });
 }

@@ -1,81 +1,65 @@
 // src/app/api/leagues/[id]/settings/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { params: { id: string } };
-type Body = {
-  name?: string;
-  season?: string | null;
-  ruleset?: string | null;
-  is_public?: boolean;
-};
+/**
+ * PATCH /api/leagues/:id/settings
+ * Body: { ...partial settings... }
+ * Only league owner can update.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const { client: sb, response } = supabaseRoute(req);
+  const leagueId = params?.id;
 
-/** JSON helper that preserves Set-Cookie headers from the Supabase response */
-function json(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
+  const payload = (await req.json().catch(() => ({} as any))) as Record<string, any>;
+  if (!leagueId) return jsonWithRes(response, { error: "league id required" }, 400);
 
-/** PATCH → owner updates league settings */
-export async function PATCH(req: NextRequest, { params }: Params) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
+
+  // owner only
+  const lmRes: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (lmRes.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
+  const role = String(lmRes?.data?.role || "").toLowerCase();
+  if (role !== "owner") return jsonWithRes(response, { error: "Forbidden" }, 403);
+
+  // shallow allowlist (extend as needed)
+  const allowedKeys = new Set([
+    "name",
+    "season",
+    "ruleset",
+    "max_teams",
+    "settings_json",
+  ]);
+  const update: Record<string, any> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (allowedKeys.has(k)) update[k] = v;
   }
 
-  try {
-    const league_id = params.id;
-    const body = (await req.json().catch(() => ({}))) as Body;
-
-    const payload: Record<string, any> = {};
-    if (typeof body.name === "string") payload.name = body.name.trim();
-    if ("season" in body) payload.season = body.season ?? null;
-    if ("ruleset" in body) payload.ruleset = body.ruleset ?? null;
-    if ("is_public" in body) payload.is_public = !!body.is_public;
-
-    if (Object.keys(payload).length === 0) return json(res, { error: "No fields to update" }, 400);
-
-    // auth + owner check
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
-
-    const { data: league, error: lerr } = await sb
-      .from("leagues")
-      .select("id, owner_id")
-      .eq("id", league_id)
-      .maybeSingle();
-
-    if (lerr) return json(res, { error: lerr.message }, 400);
-    if (!league || league.owner_id !== user.id) return json(res, { error: "Forbidden" }, 403);
-
-    const { data: updated, error: upErr } = await sb
-      .from("leagues")
-      .update(payload)
-      .eq("id", league_id)
-      .select("id, name, season, ruleset, is_public")
-      .maybeSingle();
-
-    if (upErr) return json(res, { error: upErr.message }, 400);
-
-    return json(res, { ok: true, league: updated });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
+  if (Object.keys(update).length === 0) {
+    return jsonWithRes(response, { error: "No valid settings provided" }, 400);
   }
+
+  const updRes: any = await (sb.from("leagues") as any)
+    .update(update)
+    .eq("id", leagueId)
+    .select()
+    .maybeSingle?.();
+
+  if (updRes?.error) return jsonWithRes(response, { error: updRes.error.message }, 400);
+
+  return jsonWithRes(response, { ok: true, league: updRes?.data ?? null });
 }

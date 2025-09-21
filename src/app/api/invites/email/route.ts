@@ -1,98 +1,62 @@
 // src/app/api/invites/email/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
-import { randomUUID } from "node:crypto";
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Body = { leagueId?: string; email?: string; expiresAt?: string | null };
-
-function siteUrl() {
-  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://localhost:3001";
-}
-
-/** Ensure we forward any Set-Cookie headers returned by supabaseRoute */
-function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
+/**
+ * POST /api/invites/email
+ * Body: { leagueId: string; email: string; days?: number }
+ * Creates an **email** invite row. (If you also send emails via RPC, add it after insert.)
+ */
 export async function POST(req: NextRequest) {
-  // Initialize cookie-bound supabase client and a response shell
-  let sb: ReturnType<typeof supabaseRoute>["client"];
-  let res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
-  }
+  const { client: sb, response } = supabaseRoute(req);
 
-  try {
-    const { leagueId, email, expiresAt } = (await req.json().catch(() => ({}))) as Body;
-    if (!leagueId || !email) {
-      return jsonWithRes(res, { error: "leagueId and email required" }, 400);
-    }
+  const { leagueId, email: rawEmail, days }: { leagueId?: string; email?: string; days?: number } =
+    await req.json().catch(() => ({} as any));
 
-    // Auth
-    const {
-      data: { user },
-      error: userErr,
-    } = await sb.auth.getUser();
-    if (userErr) return jsonWithRes(res, { error: userErr.message }, 500);
-    if (!user) return jsonWithRes(res, { error: "Unauthorized" }, 401);
+  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
+  const email = (rawEmail || "").trim();
+  if (!email) return jsonWithRes(response, { error: "email is required" }, 400);
 
-    // Owner/admin check
-    const { data: membership, error: memErr } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", leagueId)
-      .eq("user_id", user.id)
-      .maybeSingle();
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
 
-    if (memErr) {
-      return jsonWithRes(res, { error: `membership lookup failed: ${memErr.message}` }, 400);
-    }
-    if (!membership || !["owner", "admin"].includes(membership.role as any)) {
-      return jsonWithRes(res, { error: "only league owner/admin can invite" }, 403);
-    }
+  const perm: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (perm?.error) return jsonWithRes(response, { error: perm.error.message }, 500);
+  const role = String(perm?.data?.role || "").toLowerCase();
+  if (!(role === "owner" || role === "admin")) return jsonWithRes(response, { error: "Forbidden" }, 403);
 
-    // Prefer your RPC if it exists (returns a token), else fallback to raw insert
-    let token: string;
+  const ttlDays = Number.isFinite(days) && days! > 0 ? days! : 7;
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
 
-    const tryRpc = await sb.rpc("create_email_invite", {
-      p_league_id: leagueId,
-      p_email: email,
-      p_expires_at: expiresAt ?? null,
-    });
+  const row = {
+    league_id: leagueId,
+    email,
+    token: crypto.randomUUID().replace(/-/g, ""),
+    invited_by: user.id,
+    accepted: false,
+    created_at: new Date().toISOString(),
+    expires_at: expiresAt,
+    revoked_at: null,
+    is_public: false,
+  };
 
-    if (!tryRpc.error && tryRpc.data) {
-      token = String(tryRpc.data);
-    } else {
-      token = randomUUID();
-      const { error: insErr } = await sb.from("invites").insert({
-        league_id: leagueId,
-        email,
-        invited_by: user.id,
-        token,
-        accepted: false,
-      });
-      if (insErr) {
-        return jsonWithRes(res, { error: `insert failed: ${insErr.message}` }, 400);
-    }
-    }
+  const insRes: any = await (sb.from("invites") as any).insert(row).select().maybeSingle?.();
+  if (insRes?.error) return jsonWithRes(response, { error: insRes.error.message }, 400);
 
-    const joinUrl = `${siteUrl()}/invite/${token}`;
-    return jsonWithRes(res, { ok: true, token, joinUrl }, 200);
-  } catch (e: any) {
-    return jsonWithRes(res, { error: e?.message ?? "Server error" }, 500);
-  }
+  // If you have an RPC that sends the email, you can call it here:
+  // await (sb.rpc as any)("send_invite_email", { p_league_id: leagueId, p_email: email, p_token: row.token } as any);
+
+  return jsonWithRes(response, { ok: true, invite: insRes?.data ?? null });
 }

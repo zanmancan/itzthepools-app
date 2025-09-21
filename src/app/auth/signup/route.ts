@@ -1,40 +1,32 @@
 // src/app/api/auth/signup/route.ts
 import { NextRequest } from "next/server";
-import { supabaseServer, jsonWithRes, absoluteUrl } from "@/lib/supabaseServer";
+import { supabaseRoute, jsonWithRes, absoluteUrl } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * POST /api/auth/signup
+ * Body: { email: string }
+ * Sends a magic-link (sign-up) email.
+ */
 export async function POST(req: NextRequest) {
-  const { client, response } = supabaseServer(req);
+  const { client: sb, response } = supabaseRoute(req);
 
-  let email = "", password = "", next = "/dashboard";
-  try {
-    const body = await req.json();
-    email = String(body?.email || "").trim();
-    password = String(body?.password || "");
-    if (body?.next) next = String(body.next);
-  } catch {
-    /* ignore */
-  }
+  const { email }: { email?: string } = await req.json().catch(() => ({} as any));
+  if (!email) return jsonWithRes(response, { error: "Email is required." }, 400);
 
-  if (!email || !password) {
-    return jsonWithRes(response, { error: "Email and password are required." }, 400);
-  }
+  const redirectTo = absoluteUrl("/auth/complete");
+  const auth: any = sb.auth;
 
-  // Build redirect back to our callback, preserving "next"
-  const redirect = absoluteUrl(req, `/auth/callback?next=${encodeURIComponent(next)}`).toString();
-
-  const { error } = await client.auth.signUp({
+  const { error } = await auth.signInWithOtp({
     email,
-    password,
-    options: { emailRedirectTo: redirect },
+    options: {
+      emailRedirectTo: redirectTo,
+      shouldCreateUser: true,
+    },
   });
 
-  if (error) {
-    return jsonWithRes(response, { error: error.message, code: error.code }, 400);
-  }
-
-  // With email confirmations ON, no session yet—tell the client to show "check inbox"
-  return jsonWithRes(response, { ok: true, emailSent: true }, 200);
+  if (error) return jsonWithRes(response, { error: error.message }, 400);
+  return jsonWithRes(response, { ok: true });
 }

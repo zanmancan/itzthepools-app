@@ -1,66 +1,59 @@
 // src/app/api/invites/open/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Build a JSON response while preserving headers (incl. Set-Cookie) from `res`. */
-function json(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
+/**
+ * POST /api/invites/open
+ * Body: { leagueId: string }
+ * Creates a **public** invite (no email) for a league (owner/admin only).
+ */
+export async function POST(req: NextRequest) {
+  const { client: sb, response } = supabaseRoute(req);
 
-export async function GET(req: NextRequest) {
-  let sb, res: NextResponse;
-  try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: `supabase client init failed: ${e?.message || String(e)}` },
-      { status: 500 }
-    );
-  }
+  const { leagueId }: { leagueId?: string } = await req.json().catch(() => ({} as any));
+  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
 
-  try {
-    const league_id = new URL(req.url).searchParams.get("league_id")?.trim();
-    if (!league_id) return json(res, { error: "league_id required" }, 400);
+  // who am I
+  const {
+    data: { user },
+    error: uerr,
+  } = await sb.auth.getUser();
+  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
+  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
 
-    const {
-      data: { user },
-      error: uerr,
-    } = await sb.auth.getUser();
-    if (uerr) return json(res, { error: uerr.message }, 500);
-    if (!user) return json(res, { error: "Unauthorized" }, 401);
+  // permission
+  const lmRes: any = await sb
+    .from("league_members")
+    .select("role")
+    .eq("league_id", leagueId)
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-    // Check role for visibility rules
-    const { data: lm } = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", league_id)
-      .eq("user_id", user.id)
-      .maybeSingle();
+  if (lmRes.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
+  const role = String(lmRes?.data?.role || "").toLowerCase();
+  const can = role === "owner" || role === "admin";
+  if (!can) return jsonWithRes(response, { error: "Forbidden" }, 403);
 
-    const isOwnerOrAdmin = lm && ["owner", "admin"].includes(lm.role as any);
+  // create token
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(); // 7 days
 
-    // Open (not yet accepted) invites
-    const base = sb
-      .from("invites")
-      .select("id, league_id, email, invited_by, token, accepted, created_at")
-      .eq("league_id", league_id)
-      .eq("accepted", false)
-      .order("created_at", { ascending: false });
+  // insert public invite (no generics)
+  const insRes: any = await (sb.from("invites") as any).insert({
+    league_id: leagueId,
+    email: null,
+    token,
+    accepted: false,
+    created_at: new Date().toISOString(),
+    expires_at: expires,
+    revoked_at: null,
+    is_public: true,
+  }).select().maybeSingle?.();
 
-    const { data, error } = isOwnerOrAdmin ? await base : await base.eq("invited_by", user.id);
-    if (error) return json(res, { error: error.message }, 400);
+  if (insRes?.error) return jsonWithRes(response, { error: insRes.error.message }, 400);
 
-    return json(res, { ok: true, invites: data ?? [] });
-  } catch (e: any) {
-    return json(res, { error: e?.message ?? "Server error" }, 500);
-  }
+  return jsonWithRes(response, { ok: true, invite: insRes?.data ?? null, token });
 }
