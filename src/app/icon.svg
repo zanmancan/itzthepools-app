@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Game Pool">
+  <g fill="none" stroke="#3B82F6" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+    <path d="M14 22v10h10M50 22v10H40"/>
+    <path d="M14 32v10h10M50 32v10H40"/>
+    <path d="M22 18h20v8a10 10 0 0 1-10 10a10 10 0 0 1-10-10v-8z"/>
+    <path d="M32 36v6M24 44h16M22 48h20"/>
+    <path d="M36 46l4 4l8-8"/>
+  </g>
+</svg>
