@@ -20,10 +20,9 @@ function normalizeTeamName(n?: string | null) {
 export async function POST(req: NextRequest) {
   const { client: sb, response: res } = supabaseServer(req);
 
-  // 1) Parse token + optional team name
+  // 1) Parse input
   let token = "";
   let teamNameIn: string | null | undefined = undefined;
-
   try {
     const body = (await req.json()) as Body;
     token = typeof body?.token === "string" ? body.token.trim() : "";
@@ -37,7 +36,7 @@ export async function POST(req: NextRequest) {
   }
   if (!token) return jsonWithRes(res, { error: "token is required" }, 400);
 
-  // 2) Auth + require verified email
+  // 2) Auth + verified email
   const {
     data: { user },
     error: userErr,
@@ -47,9 +46,9 @@ export async function POST(req: NextRequest) {
     return jsonWithRes(res, { error: "Please verify your email to continue." }, 401);
   }
 
-  devlog("[invite:accept] start", { user: user.id, token });
+  devlog("[invite:accept] start", { token, user: user.id });
 
-  // 3) Team name: from body (and persist), or from profile, or block
+  // 3) Team name handling (body wins, else must exist on profile)
   let teamName: string | null = null;
   const norm = normalizeTeamName(teamNameIn ?? null);
 
@@ -62,11 +61,7 @@ export async function POST(req: NextRequest) {
       deverror("[invite:accept] set team name failed", profileErr);
       return jsonWithRes(
         res,
-        {
-          error: "Failed to set team name on profile.",
-          code: profileErr.code,
-          detail: profileErr.message,
-        },
+        { error: "Failed to set team name on profile.", detail: profileErr.message, code: profileErr.code },
         500
       );
     }
@@ -76,7 +71,6 @@ export async function POST(req: NextRequest) {
       .select("team_name")
       .eq("id", user.id)
       .maybeSingle();
-
     if (profErr) {
       deverror("[invite:accept] load profile failed", profErr);
       return jsonWithRes(res, { error: "Failed to load profile." }, 500);
@@ -94,32 +88,38 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 4) Accept invite iff not already accepted
-  devtime("invite:accept:update");
-  const { data: inv, error: updErr } = await sb
+  // 4) Load invite by token (so we can validate email & expiry first)
+  devtime("invite:accept:load");
+  const { data: inv, error: loadErr } = await sb
     .from("invites")
-    .update({ accepted: true })
+    .select("id, league_id, email, accepted, expires_at")
     .eq("token", token)
-    .eq("accepted", false)
-    .select("league_id, email")
     .maybeSingle();
-  devtimeEnd("invite:accept:update");
+  devtimeEnd("invite:accept:load");
 
-  if (updErr) {
-    deverror("[invite:accept] update failed", updErr);
-    return jsonWithRes(
-      res,
-      { error: "Failed to accept invite (update).", code: updErr.code, detail: updErr.message },
-      500
-    );
+  if (loadErr) {
+    deverror("[invite:accept] load invite failed", loadErr);
+    return jsonWithRes(res, { error: "Failed to load invite." }, 500);
   }
   if (!inv) {
-    // Either not found or already accepted — avoid scary UX
-    devlog("[invite:accept] invite not found or already accepted", { token });
-    return jsonWithRes(res, { ok: true, alreadyAccepted: true }, 200);
+    devlog("[invite:accept] invite not found", { token });
+    return jsonWithRes(res, { error: "Invite not found." }, 404);
   }
 
-  // 5) Enforce email-locked invite
+  // 5) Idempotent: already accepted?
+  if (inv.accepted) {
+    devlog("[invite:accept] already accepted", { league_id: inv.league_id, invite_id: inv.id });
+    return jsonWithRes(res, { ok: true, alreadyAccepted: true, league_id: String(inv.league_id) }, 200);
+  }
+
+  // 6) Expiry check
+  const now = new Date();
+  if (inv.expires_at && new Date(inv.expires_at) <= now) {
+    devlog("[invite:accept] expired", { invite_id: inv.id, expires_at: inv.expires_at });
+    return jsonWithRes(res, { error: "Invite has expired." }, 410);
+  }
+
+  // 7) Email-locked guard (public invites have email=null)
   const inviteEmail = String(inv.email ?? "").toLowerCase();
   const userEmail = String(user.email ?? "").toLowerCase();
   if (inviteEmail && inviteEmail !== userEmail) {
@@ -127,39 +127,38 @@ export async function POST(req: NextRequest) {
     return jsonWithRes(res, { error: "This invite is not for your email address." }, 403);
   }
 
-  // 6) Idempotent membership
+  // 8) Idempotent membership
   const league_id = String(inv.league_id);
-
-  // Does membership already exist?
   const { data: existing, error: existErr } = await sb
     .from("league_members")
     .select("user_id")
     .eq("league_id", league_id)
     .eq("user_id", user.id)
     .maybeSingle();
-
   if (existErr) {
     deverror("[invite:accept] check membership failed", existErr);
-    return jsonWithRes(
-      res,
-      { error: "Failed to check membership.", code: existErr.code, detail: existErr.message },
-      500
-    );
+    return jsonWithRes(res, { error: "Failed to check membership." }, 500);
   }
-
   if (!existing) {
     const payload = { league_id, user_id: user.id, role: "member" as const };
     const { error: insErr } = await sb.from("league_members").insert([payload]);
     if (insErr && insErr.code !== "23505") {
       deverror("[invite:accept] create membership failed", insErr, { payload });
-      return jsonWithRes(
-        res,
-        { error: "Failed to create membership.", code: insErr.code, detail: insErr.message },
-        500
-      );
+      return jsonWithRes(res, { error: "Failed to create membership." }, 500);
     }
   }
 
-  devlog("[invite:accept] success", { league_id, user_id: user.id });
+  // 9) Mark invite accepted (+ stamp accepted_at) with a guard
+  const { error: updErr } = await sb
+    .from("invites")
+    .update({ accepted: true, accepted_at: now.toISOString() })
+    .eq("id", inv.id)
+    .eq("accepted", false);
+  if (updErr) {
+    // membership is already in place; don’t block success, just log
+    deverror("[invite:accept] update accepted failed", updErr, { invite_id: inv.id });
+  }
+
+  devlog("[invite:accept] success", { league_id, user_id: user.id, invite_id: inv.id });
   return jsonWithRes(res, { ok: true, league_id }, 200);
 }
