@@ -19,9 +19,10 @@ function normalizeTeamName(n?: string | null) {
 export async function POST(req: NextRequest) {
   const { client, response } = supabaseServer(req);
 
-  // 1) Parse
+  // 1) Parse token + optional team name
   let token = "";
   let teamNameIn: string | null | undefined = undefined;
+
   try {
     const body = (await req.json()) as Body;
     token = typeof body?.token === "string" ? body.token.trim() : "";
@@ -35,18 +36,20 @@ export async function POST(req: NextRequest) {
   }
   if (!token) return jsonWithRes(response, { error: "token is required" }, 400);
 
-  // 2) Auth + email verified
-  const { data: { user }, error: userErr } = await client.auth.getUser();
+  // 2) Auth + require verified email
+  const {
+    data: { user },
+    error: userErr,
+  } = await client.auth.getUser();
   if (userErr || !user) return jsonWithRes(response, { error: "Not authenticated." }, 401);
-
-  // 🔒 Require verified email before joining any league
   if (!user.email_confirmed_at) {
     return jsonWithRes(response, { error: "Please verify your email to continue." }, 401);
   }
 
-  // 3) Team Name: provided or existing on profile (otherwise block)
+  // 3) Team name: from body (and persist), or from profile, or block
   let teamName: string | null = null;
   const norm = normalizeTeamName(teamNameIn ?? null);
+
   if (norm.ok && norm.value) {
     teamName = norm.value;
     const { error: profileErr } = await client
@@ -55,7 +58,11 @@ export async function POST(req: NextRequest) {
     if (profileErr) {
       return jsonWithRes(
         response,
-        { error: "Failed to set team name on profile.", code: profileErr.code, detail: profileErr.message },
+        {
+          error: "Failed to set team name on profile.",
+          code: profileErr.code,
+          detail: profileErr.message,
+        },
         500
       );
     }
@@ -74,17 +81,19 @@ export async function POST(req: NextRequest) {
       );
     }
     teamName = (p?.team_name ?? "").trim() || null;
-
     if (!teamName) {
       return jsonWithRes(
         response,
-        { error: "Failed to create membership.", detail: "User must set a Team Name in profile before joining a league." },
+        {
+          error: "Failed to create membership.",
+          detail: "User must set a Team Name in profile before joining a league.",
+        },
         500
       );
     }
   }
 
-  // 4) Accept invite with single UPDATE ... RETURNING
+  // 4) Accept invite iff not already accepted
   const { data: inv, error: updErr } = await client
     .from("invites")
     .update({ accepted: true })
@@ -100,7 +109,9 @@ export async function POST(req: NextRequest) {
       500
     );
   }
-  if (!inv) return jsonWithRes(response, { error: "Invite not found, already used, or not accessible." }, 404);
+  if (!inv) {
+    return jsonWithRes(response, { error: "Invite not found, already used, or not accessible." }, 404);
+  }
 
   // 5) Enforce email-locked invite
   const inviteEmail = String(inv.email ?? "").toLowerCase();
@@ -113,7 +124,7 @@ export async function POST(req: NextRequest) {
   const { data: existing, error: existErr } = await client
     .from("league_members")
     .select("user_id")
-    .eq("league_id", inv.league_id as any)
+    .eq("league_id", String(inv.league_id))
     .eq("user_id", user.id)
     .maybeSingle();
 
