@@ -17,7 +17,7 @@ type InviteRow = {
 
 type Props = {
   leagueId: string;
-  canManage: boolean;
+  canManage: boolean; // true for owner/admin
 };
 
 type Buckets = {
@@ -35,29 +35,29 @@ function fmtDateTime(v?: string | null) {
       minute: "2-digit",
     })}`;
   } catch {
-    return v;
+    return v || "—";
   }
 }
 
 export default function InvitesPanel({ leagueId, canManage }: Props) {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [buckets, setBuckets] = React.useState<Buckets>({
-    open: [],
-    accepted: [],
-    denied: [],
-  });
+  const [buckets, setBuckets] = React.useState<Buckets>({ open: [], accepted: [], denied: [] });
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
-  // Section open states — all collapsed by default
+  // create invite form
+  const [email, setEmail] = React.useState("");
+  const [asPublic, setAsPublic] = React.useState(false);
+  const [days, setDays] = React.useState<number | "">("");
+  const [creating, setCreating] = React.useState(false);
+
+  // sections: all collapsed by default
   const [secOpen, setSecOpen] = React.useState<{ open: boolean; accepted: boolean; denied: boolean }>({
     open: false,
     accepted: false,
     denied: false,
   });
-
-  const toggle = (k: keyof typeof secOpen) =>
-    setSecOpen((s) => ({ ...s, [k]: !s[k] }));
+  const toggle = (k: keyof typeof secOpen) => setSecOpen((s) => ({ ...s, [k]: !s[k] }));
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -83,7 +83,7 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
       setBuckets({ open: [], accepted: [], denied: [] });
     } finally {
       setLoading(false);
-      // Keep all sections collapsed on initial and manual reloads
+      // Keep collapsed on (re)load
       setSecOpen({ open: false, accepted: false, denied: false });
     }
   }, [leagueId]);
@@ -108,19 +108,15 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
         return;
       }
 
-      // Optimistic local update
+      // optimistic update
       setBuckets((prev) => {
-        const nowIso = new Date().toISOString();
-        const wasOpenCount = prev.open.length;
+        const before = prev.open.length;
         const found = prev.open.find((x) => x.id === id);
         const nextOpen = prev.open.filter((x) => x.id !== id);
-        const nextDenied = found ? [{ ...found, revoked_at: nowIso }, ...prev.denied] : prev.denied;
-
-        // Auto-collapse Open if it became empty after this operation
-        if (wasOpenCount > 0 && nextOpen.length === 0) {
-          setSecOpen((s) => ({ ...s, open: false }));
-        }
-
+        const nextDenied = found
+          ? [{ ...found, revoked_at: j.revoked_at || new Date().toISOString() }, ...prev.denied]
+          : prev.denied;
+        if (before > 0 && nextOpen.length === 0) setSecOpen((s) => ({ ...s, open: false }));
         return { open: nextOpen, accepted: prev.accepted, denied: nextDenied };
       });
     } catch (e: any) {
@@ -140,7 +136,59 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
       .catch(() => setError("Copy failed. You can highlight the link text and copy manually."));
   }
 
-  if (!canManage) return null;
+  async function onCreateInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    // simple validation: either public OR email
+    const trimmed = email.trim();
+    if (!asPublic && !trimmed) {
+      setError("Enter an email or check 'Public link'.");
+      return;
+    }
+    const ttl = days === "" ? undefined : Number(days);
+    if (ttl !== undefined && (!Number.isFinite(ttl) || ttl <= 0)) {
+      setError("Days must be a positive number.");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const res = await fetch("/api/invites/create", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          leagueId,
+          email: asPublic ? undefined : trimmed,
+          public: asPublic,
+          days: ttl,
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Create failed (HTTP ${res.status})`);
+        return;
+      }
+
+      const inv: InviteRow | null = j?.invite || null;
+      if (inv) {
+        // add to Open and auto-expand Open
+        setBuckets((prev) => ({ ...prev, open: [inv, ...prev.open] }));
+        setSecOpen((s) => ({ ...s, open: true }));
+      }
+
+      // reset form (keep days)
+      setEmail("");
+      setAsPublic(false);
+    } catch (e: any) {
+      setError(e?.message || "Network error creating invite.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (!canManage) return null; // member view: no invite tools
 
   return (
     <div className="rounded-lg border border-gray-800 bg-black/25">
@@ -156,9 +204,58 @@ export default function InvitesPanel({ leagueId, canManage }: Props) {
         </button>
       </div>
 
+      {/* Create invite (owner/admin only) */}
+      <form onSubmit={onCreateInvite} className="mx-3 mb-3 rounded-md border border-gray-800 bg-gray-900/40 p-3">
+        <div className="mb-2 text-sm font-medium text-gray-200">Invite someone</div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="email"
+            placeholder="invitee@email.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={creating || asPublic}
+            className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-gray-500 sm:max-w-md"
+          />
+          <button
+            type="submit"
+            disabled={creating}
+            className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {creating ? "Creating…" : "Create invite"}
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-gray-300">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={asPublic}
+              onChange={(e) => setAsPublic(e.target.checked)}
+              disabled={creating}
+              className="h-4 w-4 accent-blue-600"
+            />
+            Make this a public link (no email required)
+          </label>
+
+          <label className="inline-flex items-center gap-2">
+            Expires in
+            <input
+              type="number"
+              min={1}
+              placeholder="7"
+              value={days}
+              onChange={(e) => setDays(e.target.value === "" ? "" : Number(e.target.value))}
+              disabled={creating}
+              className="w-16 rounded-md border border-gray-700 bg-black/40 px-2 py-1 text-sm text-gray-100 outline-none focus:border-gray-500"
+            />
+            days
+          </label>
+        </div>
+      </form>
+
       {error && (
         <div className="mx-3 mb-2 rounded-md border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-300">
-          There was a problem with invites. <span className="font-semibold">{error}</span>
+          {error}
         </div>
       )}
 
