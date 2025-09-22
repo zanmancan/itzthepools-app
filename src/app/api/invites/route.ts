@@ -1,55 +1,76 @@
-// src/app/api/invites/route.ts
+// src/app/api/invites/token/[token]/route.ts
 import { NextRequest } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
+import { supabaseRoute, jsonWithRes, supabaseService } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/invites
- * Body: { leagueId: string, email: string }
- * Creates an **email invite** (owner/admin only).
- */
-export async function POST(req: NextRequest) {
-  const { client: sb, response } = supabaseRoute(req);
+// We purposely use the service-role client to bypass RLS for this very narrow, server-only read.
+// We still return only minimal, non-sensitive fields.
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { token?: string } }
+) {
+  // We still create a response via supabaseRoute so any auth cookies on the request are preserved on the way out
+  const { response: res } = supabaseRoute(req);
+  const sb = supabaseService();
 
-  const { leagueId, email }: { leagueId?: string; email?: string } = await req.json().catch(() => ({} as any));
-  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
-  if (!email) return jsonWithRes(response, { error: "email is required" }, 400);
+  const token = String(params?.token || "").trim();
+  if (!token) return jsonWithRes(res, { error: "Missing token" }, 400);
 
-  const {
-    data: { user },
-    error: uerr,
-  } = await sb.auth.getUser();
-  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
-  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
-
-  const lmRes: any = await sb
-    .from("league_members")
-    .select("role")
-    .eq("league_id", leagueId)
-    .eq("user_id", user.id)
+  // 1) Invite lookup by token
+  const { data: inv, error } = await sb
+    .from("invites")
+    .select(
+      "id, league_id, email, token, is_public, accepted, revoked_at, expires_at, created_at"
+    )
+    .eq("token", token)
     .maybeSingle();
 
-  if (lmRes.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
-  const role = String(lmRes?.data?.role || "").toLowerCase();
-  if (!(role === "owner" || role === "admin")) return jsonWithRes(response, { error: "Forbidden" }, 403);
+  if (error) return jsonWithRes(res, { error: error.message }, 400);
+  if (!inv) return jsonWithRes(res, { error: "Not found" }, 404);
 
-  const token = crypto.randomUUID().replace(/-/g, "");
-  const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
+  // 2) Validity checks
+  const now = new Date();
+  const revoked = !!inv.revoked_at;
+  const expired = !!inv.expires_at && new Date(inv.expires_at) < now;
+  if (revoked || expired) {
+    return jsonWithRes(
+      res,
+      { error: revoked ? "Invite revoked" : "Invite expired", revoked, expired },
+      404
+    );
+  }
 
-  const insRes: any = await (sb.from("invites") as any).insert({
-    league_id: leagueId,
-    email,
-    token,
-    accepted: false,
-    created_at: new Date().toISOString(),
-    expires_at: expires,
-    revoked_at: null,
-    is_public: false,
-  }).select().maybeSingle?.();
+  // 3) Minimal league info for the UI
+  const { data: lg, error: lgErr } = await sb
+    .from("leagues")
+    .select("id, name, season")
+    .eq("id", inv.league_id)
+    .maybeSingle();
 
-  if (insRes?.error) return jsonWithRes(response, { error: insRes.error.message }, 400);
+  if (lgErr) return jsonWithRes(res, { error: lgErr.message }, 400);
+  if (!lg) return jsonWithRes(res, { error: "League not found" }, 404);
 
-  return jsonWithRes(response, { ok: true, invite: insRes?.data ?? null, token });
+  return jsonWithRes(
+    res,
+    {
+      ok: true,
+      invite: {
+        id: inv.id,
+        league_id: inv.league_id,
+        email: inv.email,
+        is_public: !!inv.is_public,
+        accepted: !!inv.accepted,
+        expires_at: inv.expires_at,
+        created_at: inv.created_at,
+      },
+      league: {
+        id: lg.id,
+        name: lg.name ?? "League",
+        season: lg.season ?? "",
+      },
+    },
+    200
+  );
 }
