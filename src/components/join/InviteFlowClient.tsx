@@ -8,27 +8,34 @@ type Props = {
   variant?: "invite" | "public"; // for small copy changes
 };
 
-// ----- helpers ---------------------------------------------------------------
-async function postJSON(url: string, body: any) {
-  const res = await fetch(url, {
-    method: "POST",
+// ------------------------ helpers ------------------------
+async function fetchJSON(
+  url: string,
+  init?: RequestInit & { json?: any }
+): Promise<any> {
+  const initFinal: RequestInit = {
     credentials: "include",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.error) {
-    throw new Error(json?.error || `HTTP ${res.status}`);
+    ...init,
+  };
+  if (init?.json !== undefined) {
+    initFinal.body = JSON.stringify(init.json);
+    initFinal.method ||= "POST";
   }
-  return json;
-}
-async function getJSON(url: string) {
-  const res = await fetch(url, { credentials: "include" });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.error) {
-    throw new Error(json?.error || `HTTP ${res.status}`);
+  const res = await fetch(url, initFinal);
+
+  // Try to surface server error details (not just HTTP 500)
+  const text = await res.text().catch(() => "");
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
   }
-  return json;
+  if (!res.ok || data?.error) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 function Field({
@@ -46,7 +53,7 @@ function Field({
   );
 }
 
-// ----- component -------------------------------------------------------------
+// ------------------------ component ------------------------
 export default function InviteFlowClient({ token, variant = "invite" }: Props) {
   type Step =
     | "checking"
@@ -54,12 +61,13 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
     | "signin"
     | "signup"
     | "verify"
-    | "finalize"   // Enter Team Name AND Accept invite
+    | "finalize" // Enter Team Name AND Accept invite
     | "joining"
     | "done";
 
   const [step, setStep] = React.useState<Step>("checking");
   const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
 
   // auth fields
   const [email, setEmail] = React.useState("");
@@ -74,7 +82,7 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
   React.useEffect(() => {
     (async () => {
       try {
-        const who = await getJSON("/api/auth/whoami").catch(() => ({}));
+        const who = await fetchJSON("/api/auth/whoami", { method: "GET" }).catch(() => ({}));
         if (who?.user?.email) {
           setEmail(who.user.email);
           setStep("finalize");
@@ -87,37 +95,46 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
     })();
   }, []);
 
-  // ---- actions --------------------------------------------------------------
+  // ------------------------ actions ------------------------
   async function doSignIn(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
-      await postJSON("/api/auth/signin", { email, password });
+      await fetchJSON("/api/auth/signin", { json: { email, password } });
       setStep("finalize");
     } catch (e: any) {
       setError(e?.message || "Sign in failed");
+    } finally {
+      setBusy(false);
     }
   }
 
   async function doSignUp(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
-      await postJSON("/api/auth/signup", { email, password });
+      await fetchJSON("/api/auth/signup", { json: { email, password } });
       setStep("verify");
     } catch (e: any) {
       setError(e?.message || "Sign up failed");
+    } finally {
+      setBusy(false);
     }
   }
 
   async function doVerify(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
-      await postJSON("/api/auth/verify-code", { email, code });
+      await fetchJSON("/api/auth/verify-code", { json: { email, code } });
       setStep("finalize");
     } catch (e: any) {
       setError(e?.message || "Verify failed");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -129,22 +146,23 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
       setError("Please enter a team name.");
       return;
     }
+    setBusy(true);
     setStep("joining");
     try {
-      // If your route name differs, swap this URL/payload
-      const res = await postJSON("/api/invites/accept-with-name", {
-        p_token: token,
-        p_team_name: teamName.trim(),
+      const res = await fetchJSON("/api/invites/accept-with-name", {
+        json: { p_token: token, p_team_name: teamName.trim() },
       });
       setResultMsg(res?.message || "Success! You’ve joined the league.");
       setStep("done");
     } catch (e: any) {
       setError(e?.message || "Join failed");
       setStep("finalize");
+    } finally {
+      setBusy(false);
     }
   }
 
-  // ---- UI -------------------------------------------------------------------
+  // ------------------------ UI ------------------------
   return (
     <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-5">
       <div className="mb-4 text-sm text-gray-400">
@@ -185,7 +203,8 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              disabled={busy}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <Field label="Password">
@@ -194,20 +213,23 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              disabled={busy}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+              disabled={busy}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-60"
             >
-              Sign in
+              {busy ? "Signing in…" : "Sign in"}
             </button>
             <button
               type="button"
               onClick={() => setStep("signup")}
-              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60"
+              disabled={busy}
+              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60 disabled:opacity-60"
             >
               Create account instead
             </button>
@@ -223,7 +245,8 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              disabled={busy}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <Field label="Password">
@@ -232,20 +255,23 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              disabled={busy}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500"
+              disabled={busy}
+              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
             >
-              Create account
+              {busy ? "Creating…" : "Create account"}
             </button>
             <button
               type="button"
               onClick={() => setStep("signin")}
-              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60"
+              disabled={busy}
+              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60 disabled:opacity-60"
             >
               I already have an account
             </button>
@@ -265,15 +291,17 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              className="w-48 rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              disabled={busy}
+              className="w-48 rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+              disabled={busy}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-60"
             >
-              Verify & continue
+              {busy ? "Verifying…" : "Verify & continue"}
             </button>
           </div>
         </form>
@@ -291,16 +319,18 @@ export default function InviteFlowClient({ token, variant = "invite" }: Props) {
               required
               value={teamName}
               onChange={(e) => setTeamName(e.target.value)}
+              disabled={busy}
               placeholder="e.g. Zandy United"
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500"
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
             />
           </Field>
           <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500"
+              disabled={busy}
+              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
             >
-              Join league
+              {busy ? "Joining…" : "Join league"}
             </button>
             <Link
               href="/dashboard"
