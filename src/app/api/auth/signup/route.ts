@@ -1,4 +1,4 @@
-// src/app/api/auth/verify-code/route.ts
+// src/app/api/auth/signup/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
@@ -24,16 +24,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { email, code } = await req.json().catch(() => ({}));
-    if (!email || !code) return jsonWithRes(res, { error: "Email and code are required." }, 400);
+    const { email, password } = await req.json().catch(() => ({}));
+    if (!email || !password) return jsonWithRes(res, { error: "Email and password are required." }, 400);
 
-    // For email+password signup confirmations the type is "signup".
-    // If you ever switch to magic links, you'd use type: "email".
-    const { data, error } = await sb.auth.verifyOtp({ email, token: code, type: "signup" });
+    const { data, error } = await sb.auth.signUp({ email, password });
     if (error) return jsonWithRes(res, { error: error.message }, 400);
 
+    // Supabase will send a verification email. User must verify then sign in or verify code.
     return jsonWithRes(res, { ok: true, user: data.user ?? null });
   } catch (e: any) {
-    return jsonWithRes(res, { error: e?.message || "Verify error" }, 500);
+    return jsonWithRes(res, { error: e?.message || "Signup error" }, 500);
   }
 }

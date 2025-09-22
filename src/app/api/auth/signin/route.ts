@@ -1,4 +1,4 @@
-// src/app/api/auth/whoami/route.ts
+// src/app/api/auth/signin/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabaseServer";
 
@@ -15,7 +15,7 @@ function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
   });
 }
 
-export async function GET(req: NextRequest) {
+export async function POST(req: NextRequest) {
   let sb, res: NextResponse;
   try {
     ({ client: sb, response: res } = supabaseRoute(req));
@@ -23,7 +23,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: e?.message || "Supabase init failed" }, { status: 500 });
   }
 
-  const { data, error } = await sb.auth.getUser();
-  if (error) return jsonWithRes(res, { error: error.message }, 401);
-  return jsonWithRes(res, { user: data.user ?? null });
+  try {
+    const { email, password } = await req.json().catch(() => ({}));
+    if (!email || !password) return jsonWithRes(res, { error: "Email and password are required." }, 400);
+
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) return jsonWithRes(res, { error: error.message }, 401);
+
+    return jsonWithRes(res, { ok: true, user: data.user ?? null });
+  } catch (e: any) {
+    return jsonWithRes(res, { error: e?.message || "Signin error" }, 500);
+  }
 }

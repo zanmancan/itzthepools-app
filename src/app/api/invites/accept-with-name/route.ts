@@ -1,65 +1,126 @@
 // src/app/api/invites/accept-with-name/route.ts
-import { NextRequest } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
+import { NextRequest, NextResponse } from "next/server";
+import { supabaseRoute } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/invites/accept-with-name
- * Body: { token: string; teamName: string }
- *
- * Calls the Postgres RPC function `accept_invite_with_name(p_token text, p_team_name text)`
- * to atomically accept the invite and set the team name.
- *
- * Notes:
- * - We avoid Supabase generics (no generated DB types in this project).
- * - We cast the RPC params as `any` so TS doesn’t force the second arg to `undefined`.
- * - Uses supabaseRoute(req) so auth cookies are forwarded correctly.
- */
+/** Lightweight row types so TS stops inferring `never` */
+type InviteRow = {
+  id: string;
+  token: string;
+  league_id: string;
+  email: string | null;
+  is_public: boolean | null;
+  accepted: boolean | null;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  expires_at: string | null;
+};
+
+type LeagueMemberUpsert = {
+  league_id: string;
+  user_id: string;
+  role: "owner" | "admin" | "member";
+  team_name?: string | null;
+};
+
+function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
+  return new NextResponse(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(res.headers),
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
-  const { client: sb, response } = supabaseRoute(req);
-
-  // Parse & validate payload
-  const { token, teamName }: { token?: string; teamName?: string } = await req
-    .json()
-    .catch(() => ({} as any));
-
-  if (!token || typeof token !== "string") {
-    return jsonWithRes(response, { error: "token is required" }, 400);
-  }
-  const cleanTeam = String(teamName || "").trim();
-  if (!cleanTeam) {
-    return jsonWithRes(response, { error: "teamName is required" }, 400);
-  }
-
-  // Ensure we have a session (some installs let anonymous accept; if that’s your intent, remove this block)
-  const {
-    data: { user },
-    error: uerr,
-  } = await sb.auth.getUser();
-  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
-  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
-
-  // Call RPC (cast params to any to avoid TS “undefined” second arg)
+  let sb, res: NextResponse;
   try {
-    const { data, error } = await (sb.rpc as any)("accept_invite_with_name", {
-      p_token: token,
-      p_team_name: cleanTeam,
-    } as any);
+    ({ client: sb, response: res } = supabaseRoute(req));
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Failed to initialize Supabase client" },
+      { status: 500 }
+    );
+  }
 
-    if (error) {
-      // Common SQL/RLS errors get bubbled up here
-      return jsonWithRes(response, { error: error.message }, 400);
+  try {
+    const { p_token, p_team_name } = await req.json().catch(() => ({}));
+    const token = String(p_token || "").trim();
+    const teamName = String(p_team_name || "").trim();
+
+    if (!token) return jsonWithRes(res, { error: "Missing invite token." }, 400);
+    if (!teamName) return jsonWithRes(res, { error: "Team name is required." }, 400);
+
+    // Who am I?
+    const {
+      data: { user },
+      error: uerr,
+    } = await sb.auth.getUser();
+    if (uerr) return jsonWithRes(res, { error: uerr.message }, 500);
+    if (!user) return jsonWithRes(res, { error: "Unauthorized" }, 401);
+
+    // Load invite by token – cast result to our local type
+    const { data, error } = await sb
+      .from("invites")
+      .select(
+        "id, token, league_id, email, is_public, accepted, accepted_at, revoked_at, expires_at"
+      )
+      .eq("token", token)
+      .maybeSingle();
+
+    if (error) return jsonWithRes(res, { error: error.message }, 400);
+
+    const inv = (data as any) as InviteRow | null;
+    if (!inv) return jsonWithRes(res, { error: "Invite not found." }, 404);
+
+    // Validate state
+    if (inv.revoked_at) return jsonWithRes(res, { error: "Invite has been revoked." }, 409);
+    if (inv.accepted) return jsonWithRes(res, { error: "Invite already used." }, 409);
+    if (inv.expires_at) {
+      const exp = new Date(inv.expires_at);
+      if (!Number.isNaN(+exp) && exp.getTime() < Date.now()) {
+        return jsonWithRes(res, { error: "Invite has expired." }, 409);
+      }
     }
 
-    // If your RPC returns something specific (e.g., team_id, league_id), it will be in `data`
-    return jsonWithRes(response, { ok: true, data });
+    // If email invite, ensure email matches the signed-in user
+    if (inv.email && user.email && inv.email.toLowerCase() !== user.email.toLowerCase()) {
+      return jsonWithRes(res, { error: "This invite was addressed to a different email." }, 403);
+    }
+
+    // Upsert league_members (cast the *builder* to any so TS won't infer `never`)
+    const up: LeagueMemberUpsert = {
+      league_id: inv.league_id,
+      user_id: user.id,
+      role: "member",
+      team_name: teamName,
+    };
+
+    {
+      const { error: upErr } = (sb.from("league_members") as any).upsert(up, {
+        onConflict: "league_id,user_id",
+      });
+      if (upErr) return jsonWithRes(res, { error: upErr.message }, 400);
+    }
+
+    // Mark invite as accepted (cast builder to any for the update)
+    {
+      const payload = {
+        accepted: true,
+        accepted_at: new Date().toISOString(),
+      };
+
+      const { error: updErr } = (sb.from("invites") as any)
+        .update(payload)
+        .eq("id", inv.id);
+      if (updErr) return jsonWithRes(res, { error: updErr.message }, 400);
+    }
+
+    return jsonWithRes(res, { ok: true, message: "Success! You’ve joined the league." });
   } catch (e: any) {
-    return jsonWithRes(
-      response,
-      { error: e?.message || "Unexpected error calling accept_invite_with_name." },
-      500
-    );
+    return jsonWithRes(res, { error: e?.message || "Server error" }, 500);
   }
 }
