@@ -1,361 +1,375 @@
+// src/components/join/InviteFlowClient.tsx
 "use client";
 
-import React from "react";
+import * as React from "react";
 import Link from "next/link";
 
-type Props = {
-  token: string;                 // invite/public token
-  variant?: "invite" | "public"; // for small copy changes
+type InviteMeta = {
+  id: string;
+  league_id: string;
+  email: string | null;
+  is_public: boolean | null;
+  token: string | null;
+  created_at: string;
+  expires_at: string | null;
 };
 
-// ------------------------ helpers ------------------------
-async function fetchJSON(
-  url: string,
-  init?: RequestInit & { json?: any }
-): Promise<any> {
-  const initFinal: RequestInit = {
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    ...init,
-  };
-  if (init?.json !== undefined) {
-    initFinal.body = JSON.stringify(init.json);
-    initFinal.method ||= "POST";
-  }
-  const res = await fetch(url, initFinal);
+type Step = "invite" | "auth" | "verify" | "accept" | "done";
 
-  // Try to surface server error details (not just HTTP 500)
-  const text = await res.text().catch(() => "");
-  let data: any = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = {};
-  }
-  if (!res.ok || data?.error) {
-    throw new Error(data?.error || `HTTP ${res.status}`);
-  }
-  return data;
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block text-sm text-gray-300">
-      <span className="mb-1 block">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-// ------------------------ component ------------------------
-export default function InviteFlowClient({ token, variant = "invite" }: Props) {
-  type Step =
-    | "checking"
-    | "chooseAuth"
-    | "signin"
-    | "signup"
-    | "verify"
-    | "finalize" // Enter Team Name AND Accept invite
-    | "joining"
-    | "done";
-
-  const [step, setStep] = React.useState<Step>("checking");
+export default function InviteFlowClient({ token }: { token: string }) {
+  // invite meta
+  const [loading, setLoading] = React.useState(true);
+  const [meta, setMeta] = React.useState<InviteMeta | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
+
+  // step state
+  const [step, setStep] = React.useState<Step>("invite");
+  const [mode, setMode] = React.useState<"signin" | "signup">("signup");
 
   // auth fields
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [authBusy, setAuthBusy] = React.useState(false);
+
+  // verify fields (signup only)
   const [code, setCode] = React.useState("");
+  const [verifyBusy, setVerifyBusy] = React.useState(false);
 
-  // finalize (team + accept)
+  // accept fields
   const [teamName, setTeamName] = React.useState("");
-  const [resultMsg, setResultMsg] = React.useState<string | null>(null);
+  const [acceptBusy, setAcceptBusy] = React.useState(false);
+  const [acceptedLeagueId, setAcceptedLeagueId] = React.useState<string | null>(null);
 
-  // On mount: see if already signed-in
+  // UX for "Copied!"
+  const [copied, setCopied] = React.useState(false);
+
+  // load invite metadata
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      setError(null);
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/invites/token/${encodeURIComponent(token)}`, { credentials: "include" });
+        const j = await res.json();
+        if (!res.ok || j?.error) {
+          if (!alive) return;
+          setError(j?.error || `Failed to load invite (HTTP ${res.status})`);
+          setMeta(null);
+          setStep("invite");
+        } else {
+          if (!alive) return;
+          setMeta(j.invite as InviteMeta);
+          setStep("auth");
+          // If the invite was addressed to an email, prefill:
+          if (j?.invite?.email) setEmail(j.invite.email);
+        }
+      } catch (e: any) {
+        if (!alive) return;
+        setError(e?.message || "Network error loading invite.");
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+
+  // check if already signed in -> skip auth/verify
   React.useEffect(() => {
     (async () => {
       try {
-        const who = await fetchJSON("/api/auth/whoami", { method: "GET" }).catch(() => ({}));
-        if (who?.user?.email) {
-          setEmail(who.user.email);
-          setStep("finalize");
-        } else {
-          setStep("chooseAuth");
+        const res = await fetch("/api/auth/whoami", { credentials: "include" });
+        if (res.ok) {
+          setStep("accept");
         }
-      } catch {
-        setStep("chooseAuth");
-      }
+      } catch {}
     })();
   }, []);
 
-  // ------------------------ actions ------------------------
-  async function doSignIn(e: React.FormEvent) {
+  function copyLink() {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => setError("Copy failed.")
+    );
+  }
+
+  async function onSignIn(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setBusy(true);
+    setAuthBusy(true);
     try {
-      await fetchJSON("/api/auth/signin", { json: { email, password } });
-      setStep("finalize");
+      const res = await fetch("/api/auth/signin", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Sign in failed (HTTP ${res.status})`);
+        return;
+      }
+      // signed in -> go straight to accept
+      setStep("accept");
     } catch (e: any) {
-      setError(e?.message || "Sign in failed");
+      setError(e?.message || "Network error during sign in.");
     } finally {
-      setBusy(false);
+      setAuthBusy(false);
     }
   }
 
-  async function doSignUp(e: React.FormEvent) {
+  async function onSignUp(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setBusy(true);
+    setAuthBusy(true);
     try {
-      await fetchJSON("/api/auth/signup", { json: { email, password } });
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Sign up failed (HTTP ${res.status})`);
+        return;
+      }
+      // send/confirm code next
       setStep("verify");
     } catch (e: any) {
-      setError(e?.message || "Sign up failed");
+      setError(e?.message || "Network error during sign up.");
     } finally {
-      setBusy(false);
+      setAuthBusy(false);
     }
   }
 
-  async function doVerify(e: React.FormEvent) {
-    e.preventDefault();
+  async function resendCode() {
     setError(null);
-    setBusy(true);
     try {
-      await fetchJSON("/api/auth/verify-code", { json: { email, code } });
-      setStep("finalize");
-    } catch (e: any) {
-      setError(e?.message || "Verify failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // The final, single action: enter team name AND accept invite
-  async function doJoin(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    if (!teamName.trim()) {
-      setError("Please enter a team name.");
-      return;
-    }
-    setBusy(true);
-    setStep("joining");
-    try {
-      const res = await fetchJSON("/api/invites/accept-with-name", {
-        json: { p_token: token, p_team_name: teamName.trim() },
+      const res = await fetch("/api/auth/resend", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
       });
-      setResultMsg(res?.message || "Success! You’ve joined the league.");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Could not resend code (HTTP ${res.status})`);
+      }
+    } catch (e: any) {
+      setError(e?.message || "Network error requesting code.");
+    }
+  }
+
+  async function onVerify(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setVerifyBusy(true);
+    try {
+      const res = await fetch("/api/auth/verify-code", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, code, mode: "signup" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Verification failed (HTTP ${res.status})`);
+        return;
+      }
+      setStep("accept");
+    } catch (e: any) {
+      setError(e?.message || "Network error verifying code.");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  async function onAccept(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setAcceptBusy(true);
+    try {
+      const res = await fetch("/api/invites/accept", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, teamName }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        setError(j?.error || `Accept failed (HTTP ${res.status})`);
+        return;
+      }
+      setAcceptedLeagueId(String(j.league_id || ""));
       setStep("done");
     } catch (e: any) {
-      setError(e?.message || "Join failed");
-      setStep("finalize");
+      setError(e?.message || "Network error accepting invite.");
     } finally {
-      setBusy(false);
+      setAcceptBusy(false);
     }
   }
 
-  // ------------------------ UI ------------------------
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-5">
-      <div className="mb-4 text-sm text-gray-400">
-        {variant === "public" ? "Public link invite" : "League invite"} • token{" "}
-        <span className="opacity-60">{token.slice(0, 6)}…</span>
-      </div>
+    <div className="mx-auto w-full max-w-lg rounded-xl border border-gray-800 bg-gray-950/40 p-5">
+      <h1 className="mb-3 text-xl font-semibold">Join League</h1>
+
+      {/* invite details */}
+      {(loading || meta) && (
+        <div className="mb-4 rounded-md border border-gray-800 bg-black/25 p-3 text-sm text-gray-300">
+          {loading ? "Loading invite…" : (
+            <>
+              <div>Type: {meta?.is_public ? "Public link" : "Email invite"}</div>
+              <div>Sent to: {meta?.email || "—"}</div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-xs ${copied ? "bg-green-700 text-white" : "bg-gray-700 hover:bg-gray-600"}`}
+                  onClick={copyLink}
+                >
+                  {copied ? "Copied!" : "Copy link"}
+                </button>
+                {meta?.expires_at && <span className="text-gray-400">Expires: {new Date(meta.expires_at).toLocaleString()}</span>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {error && (
-        <div className="mb-4 rounded-md border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-300">
+        <div className="mb-4 rounded-md border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-200">
           {error}
         </div>
       )}
 
-      {step === "checking" && <p className="text-gray-300">Loading…</p>}
+      {/* step: auth (sign in OR sign up) */}
+      {step === "auth" && (
+        <div className="space-y-3">
+          <div className="flex gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setMode("signin")}
+              className={`rounded px-3 py-1 ${mode === "signin" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-200"}`}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("signup")}
+              className={`rounded px-3 py-1 ${mode === "signup" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-200"}`}
+            >
+              Create account
+            </button>
+          </div>
 
-      {step === "chooseAuth" && (
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <button
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
-            onClick={() => setStep("signin")}
-          >
-            I already have an account
-          </button>
-          <button
-            className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60"
-            onClick={() => setStep("signup")}
-          >
-            I’m new — create account
-          </button>
+          <form onSubmit={mode === "signin" ? onSignIn : onSignUp} className="space-y-2">
+            <input
+              type="email"
+              placeholder="you@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-gray-500"
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-gray-500"
+            />
+            <button
+              type="submit"
+              disabled={authBusy}
+              className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-60"
+            >
+              {authBusy ? (mode === "signin" ? "Signing in…" : "Creating account…") : (mode === "signin" ? "Sign in" : "Create account")}
+            </button>
+          </form>
         </div>
       )}
 
-      {step === "signin" && (
-        <form onSubmit={doSignIn} className="flex flex-col gap-3">
-          <Field label="Email">
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
-            />
-          </Field>
-          <Field label="Password">
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
-            />
-          </Field>
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-60"
-            >
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setStep("signup")}
-              disabled={busy}
-              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60 disabled:opacity-60"
-            >
-              Create account instead
-            </button>
-          </div>
-        </form>
-      )}
-
-      {step === "signup" && (
-        <form onSubmit={doSignUp} className="flex flex-col gap-3">
-          <Field label="Email">
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
-            />
-          </Field>
-          <Field label="Password">
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
-            />
-          </Field>
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
-            >
-              {busy ? "Creating…" : "Create account"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setStep("signin")}
-              disabled={busy}
-              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60 disabled:opacity-60"
-            >
-              I already have an account
-            </button>
-          </div>
-        </form>
-      )}
-
+      {/* step: verify (signup only) */}
       {step === "verify" && (
-        <form onSubmit={doVerify} className="flex flex-col gap-3">
+        <form onSubmit={onVerify} className="space-y-3">
           <p className="text-sm text-gray-300">
-            We sent a verification code to <span className="font-medium">{email}</span>.
+            We sent a 6-digit code to <span className="font-medium">{email}</span>. Enter it below to verify your email.
           </p>
-          <Field label="Verification code">
-            <input
-              inputMode="numeric"
-              pattern="[0-9]*"
-              required
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              disabled={busy}
-              className="w-48 rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
-            />
-          </Field>
-          <div className="flex gap-3">
+          <input
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="Enter code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-gray-500"
+          />
+          <div className="flex items-center gap-2">
             <button
               type="submit"
-              disabled={busy}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-60"
+              disabled={verifyBusy}
+              className="rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
             >
-              {busy ? "Verifying…" : "Verify & continue"}
+              {verifyBusy ? "Verifying…" : "Verify"}
+            </button>
+            <button
+              type="button"
+              onClick={resendCode}
+              className="rounded-md border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800/40"
+            >
+              Resend code
             </button>
           </div>
         </form>
       )}
 
-      {/* FINALIZE: Team name AND accept in the same submit */}
-      {step === "finalize" && (
-        <form onSubmit={doJoin} className="flex flex-col gap-3">
-          <p className="text-sm text-gray-300">
-            Final step: choose your <span className="font-medium">Team Name</span> and join the league.
-          </p>
-          <Field label="Team name">
+      {/* step: accept (team name + accept) */}
+      {step === "accept" && (
+        <form onSubmit={onAccept} className="space-y-3">
+          <label className="block text-sm text-gray-300">
+            Team name
             <input
               type="text"
-              required
               value={teamName}
               onChange={(e) => setTeamName(e.target.value)}
-              disabled={busy}
-              placeholder="e.g. Zandy United"
-              className="w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 outline-none focus:border-gray-500 disabled:opacity-60"
+              placeholder="Your team name"
+              className="mt-1 w-full rounded-md border border-gray-700 bg-black/40 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-gray-500"
             />
-          </Field>
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
-            >
-              {busy ? "Joining…" : "Join league"}
-            </button>
-            <Link
-              href="/dashboard"
-              className="rounded-md border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:bg-gray-800/60"
-            >
-              Go to Dashboard
-            </Link>
-          </div>
+          </label>
+          <button
+            type="submit"
+            disabled={acceptBusy || !teamName.trim()}
+            className="w-full rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-500 disabled:opacity-60"
+          >
+            {acceptBusy ? "Accepting…" : "Accept invite"}
+          </button>
         </form>
       )}
 
-      {step === "joining" && <p className="text-gray-300">Joining…</p>}
-
+      {/* step: done */}
       {step === "done" && (
         <div className="space-y-3">
-          <div className="rounded-md border border-green-800 bg-green-900/20 px-3 py-2 text-sm text-green-200">
-            {resultMsg || "Success! You’ve joined the league."}
-          </div>
-          <div className="flex gap-3">
+          <p className="text-sm text-green-300">Success! You’ve joined the league.</p>
+          <div className="flex gap-2">
             <Link
               href="/dashboard"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+              className="rounded-md border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800/40"
             >
               Go to Dashboard
             </Link>
+            {acceptedLeagueId && (
+              <Link
+                href={`/league/${acceptedLeagueId}`}
+                className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-500"
+              >
+                Open League
+              </Link>
+            )}
           </div>
         </div>
       )}

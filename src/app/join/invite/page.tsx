@@ -1,14 +1,10 @@
 // src/app/join/invite/page.tsx
-import InviteFlowClient from "../../../components/join/InviteFlowClient";
+import InviteFlowClient from "@/components/join/InviteFlowClient";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default function JoinInvitePage({
-  searchParams,
-}: {
-  searchParams?: { token?: string };
-}) {
+export default function JoinInvitePage({ searchParams }: { searchParams?: { token?: string } }) {
   const token = (searchParams?.token || "").trim();
 
   return (
@@ -20,8 +16,7 @@ export default function JoinInvitePage({
           Missing token. Check your link or ask for a new invite.
         </div>
       ) : (
-        // Always render the client flow; it handles sign-in/create/verify/finalize
-        <InviteFlowClient token={token} variant="invite" />
+        <InviteFlowClient token={token} />
       )}
     </div>
   );

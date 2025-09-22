@@ -1,40 +1,38 @@
 // src/app/api/auth/signin/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+// Sign in with email/password and persist the Supabase session cookies.
+// Uses supabaseRoute(req) so Set-Cookie headers are forwarded.
+
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
 export async function POST(req: NextRequest) {
-  let sb, res: NextResponse;
+  // Bind client to the incoming request so auth cookies flow back out
+  const { client, response } = supabaseRoute(req);
+
+  let body: any;
   try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Supabase init failed" }, { status: 500 });
+    body = await req.json();
+  } catch {
+    return jsonWithRes(response, { error: "Invalid JSON body." }, 400);
+  }
+
+  const email = String(body?.email || "").trim();
+  const password = String(body?.password || "");
+
+  if (!email || !password) {
+    return jsonWithRes(response, { error: "Email and password are required." }, 400);
   }
 
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const email = typeof body?.email === "string" ? body.email.trim() : "";
-    const password = typeof body?.password === "string" ? body.password : "";
-    if (!email || !password) return jsonWithRes(res, { error: "Email and password are required." }, 400);
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) return jsonWithRes(response, { error: error.message, code: error.code }, 401);
+    if (!data?.session) return jsonWithRes(response, { error: "No session returned." }, 500);
 
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) return jsonWithRes(res, { error: error.message }, 401);
-
-    return jsonWithRes(res, { ok: true, user: data?.user ?? null });
+    return jsonWithRes(response, { ok: true }, 200);
   } catch (e: any) {
-    console.error("signin error:", e);
-    return jsonWithRes(res, { error: e?.message || "Signin error" }, 500);
+    return jsonWithRes(response, { error: e?.message || "Server error during sign in." }, 500);
   }
 }

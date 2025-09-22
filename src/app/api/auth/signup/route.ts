@@ -1,62 +1,46 @@
 // src/app/api/auth/signup/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabaseServer";
+// Create account (email/password). If email confirmation is ON, a code/link is sent.
+
+import { NextRequest } from "next/server";
+import { supabaseRoute, jsonWithRes, absoluteUrl } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
-  });
-}
-
-// Best-effort origin for email redirect (Supabase may require this)
-function getOrigin(req: NextRequest) {
-  const hdr = req.headers.get("x-forwarded-proto") && req.headers.get("x-forwarded-host")
-    ? `${req.headers.get("x-forwarded-proto")}://${req.headers.get("x-forwarded-host")}`
-    : req.nextUrl.origin;
-  return hdr;
-}
-
 export async function POST(req: NextRequest) {
-  let sb, res: NextResponse;
+  const { client, response } = supabaseRoute(req);
+
+  let body: any;
   try {
-    ({ client: sb, response: res } = supabaseRoute(req));
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Supabase init failed" }, { status: 500 });
+    body = await req.json();
+  } catch {
+    return jsonWithRes(response, { error: "Invalid JSON body." }, 400);
+  }
+
+  const email = String(body?.email || "").trim();
+  const password = String(body?.password || "");
+
+  if (!email || !password) {
+    return jsonWithRes(response, { error: "Email and password are required." }, 400);
+  }
+  if (password.length < 6) {
+    return jsonWithRes(response, { error: "Password must be at least 6 characters." }, 400);
   }
 
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const email = typeof body?.email === "string" ? body.email.trim() : "";
-    const password = typeof body?.password === "string" ? body.password : "";
-    if (!email || !password) return jsonWithRes(res, { error: "Email and password are required." }, 400);
-
-    const emailRedirectTo = `${getOrigin(req)}/login`; // where users land after confirming
-    const { data, error } = await sb.auth.signUp({
+    const { data, error } = await client.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo },
+      options: {
+        // Safe even if you mainly use OTP codes.
+        emailRedirectTo: absoluteUrl("/auth/callback"),
+      },
     });
+    if (error) return jsonWithRes(response, { error: error.message, code: error.code }, 400);
 
-    if (error) {
-      // Surface Supabase message (e.g., password policy / disallowed domain)
-      return jsonWithRes(res, { error: error.message }, 400);
-    }
-
-    return jsonWithRes(res, {
-      ok: true,
-      user: data?.user ?? null,
-      message: "Check your email for a verification code or link.",
-    });
+    const needsVerification = !data?.user?.email_confirmed_at;
+    return jsonWithRes(response, { ok: true, needsVerification }, 200);
   } catch (e: any) {
-    // Ensure the client always gets JSON, not a naked 500
-    console.error("signup error:", e);
-    return jsonWithRes(res, { error: e?.message || "Signup error" }, 500);
+    return jsonWithRes(response, { error: e?.message || "Server error during sign up." }, 500);
   }
 }
