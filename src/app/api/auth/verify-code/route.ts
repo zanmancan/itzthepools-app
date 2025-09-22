@@ -24,16 +24,19 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { email, code } = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({} as any));
+    const email = typeof body?.email === "string" ? body.email.trim() : "";
+    const code = typeof body?.code === "string" ? body.code.trim() : "";
     if (!email || !code) return jsonWithRes(res, { error: "Email and code are required." }, 400);
 
-    // For email+password signup confirmations the type is "signup".
-    // If you ever switch to magic links, you'd use type: "email".
+    // For email+password signup confirmations the type is usually "signup"
+    // (If using email OTP directly, this might be "email")
     const { data, error } = await sb.auth.verifyOtp({ email, token: code, type: "signup" });
     if (error) return jsonWithRes(res, { error: error.message }, 400);
 
-    return jsonWithRes(res, { ok: true, user: data.user ?? null });
+    return jsonWithRes(res, { ok: true, user: data?.user ?? null });
   } catch (e: any) {
+    console.error("verify-code error:", e);
     return jsonWithRes(res, { error: e?.message || "Verify error" }, 500);
   }
 }

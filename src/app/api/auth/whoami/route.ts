@@ -25,5 +25,5 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await sb.auth.getUser();
   if (error) return jsonWithRes(res, { error: error.message }, 401);
-  return jsonWithRes(res, { user: data.user ?? null });
+  return jsonWithRes(res, { user: data?.user ?? null });
 }
