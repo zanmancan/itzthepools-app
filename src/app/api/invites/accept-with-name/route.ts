@@ -5,7 +5,6 @@ import { supabaseRoute } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Lightweight row types so TS stops inferring `never` */
 type InviteRow = {
   id: string;
   token: string;
@@ -26,13 +25,14 @@ type LeagueMemberUpsert = {
 };
 
 function jsonWithRes(res: NextResponse, body: unknown, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
+  const out = new NextResponse(JSON.stringify(body), {
     status,
-    headers: {
-      "content-type": "application/json",
-      ...Object.fromEntries(res.headers),
-    },
+    headers: { "content-type": "application/json" },
   });
+  res.headers.forEach((v, k) => {
+    if (k.toLowerCase() === "set-cookie") out.headers.append("set-cookie", v);
+  });
+  return out;
 }
 
 export async function POST(req: NextRequest) {
@@ -62,23 +62,20 @@ export async function POST(req: NextRequest) {
     if (uerr) return jsonWithRes(res, { error: uerr.message }, 500);
     if (!user) return jsonWithRes(res, { error: "Unauthorized" }, 401);
 
-    // Load invite by token – cast result to our local type
+    // Load invite
     const { data, error } = await sb
       .from("invites")
-      .select(
-        "id, token, league_id, email, is_public, accepted, accepted_at, revoked_at, expires_at"
-      )
+      .select("id, token, league_id, email, is_public, accepted, accepted_at, revoked_at, expires_at")
       .eq("token", token)
       .maybeSingle();
 
     if (error) return jsonWithRes(res, { error: error.message }, 400);
-
     const inv = (data as any) as InviteRow | null;
     if (!inv) return jsonWithRes(res, { error: "Invite not found." }, 404);
 
     // Validate state
     if (inv.revoked_at) return jsonWithRes(res, { error: "Invite has been revoked." }, 409);
-    if (inv.accepted) return jsonWithRes(res, { error: "Invite already used." }, 409);
+    if (inv.accepted)  return jsonWithRes(res, { error: "Invite already used." }, 409);
     if (inv.expires_at) {
       const exp = new Date(inv.expires_at);
       if (!Number.isNaN(+exp) && exp.getTime() < Date.now()) {
@@ -91,29 +88,37 @@ export async function POST(req: NextRequest) {
       return jsonWithRes(res, { error: "This invite was addressed to a different email." }, 403);
     }
 
-    // Upsert league_members (cast the *builder* to any so TS won't infer `never`)
+    // Enforce unique team name within this league (case-insensitive exact)
+    {
+      const { data: dup, error: dupErr } = await (sb.from("league_members") as any)
+        .select("id")
+        .eq("league_id", inv.league_id)
+        .ilike("team_name", teamName)
+        .limit(1);
+      if (dupErr) return jsonWithRes(res, { error: dupErr.message }, 400);
+      if (Array.isArray(dup) && dup.length) {
+        return jsonWithRes(res, { error: "That team name is already taken in this league." }, 409);
+      }
+    }
+
+    // Upsert membership with chosen team name
     const up: LeagueMemberUpsert = {
       league_id: inv.league_id,
       user_id: user.id,
       role: "member",
       team_name: teamName,
     };
-
     {
-      const { error: upErr } = (sb.from("league_members") as any).upsert(up, {
+      const { error: upErr } = await (sb.from("league_members") as any).upsert(up, {
         onConflict: "league_id,user_id",
       });
       if (upErr) return jsonWithRes(res, { error: upErr.message }, 400);
     }
 
-    // Mark invite as accepted (cast builder to any for the update)
+    // Mark invite accepted
     {
-      const payload = {
-        accepted: true,
-        accepted_at: new Date().toISOString(),
-      };
-
-      const { error: updErr } = (sb.from("invites") as any)
+      const payload = { accepted: true, accepted_at: new Date().toISOString() };
+      const { error: updErr } = await (sb.from("invites") as any)
         .update(payload)
         .eq("id", inv.id);
       if (updErr) return jsonWithRes(res, { error: updErr.message }, 400);
