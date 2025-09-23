@@ -14,11 +14,16 @@
     "lint": "next lint",
     "lint:all": "eslint \"src/**/*.{ts,tsx,js,jsx}\" \"lib/**/*.{ts,tsx,js,jsx}\" || true",
     "lint:fix": "eslint --fix \"src/**/*.{ts,tsx,js,jsx}\" \"components/**/*.{ts,tsx,js,jsx}\" \"lib/**/*.{ts,tsx,js,jsx}\"",
-    "e2e": "playwright test",
+    "e2e": "npm run test:e2e",
     "e2e:ui": "playwright test --ui",
-    "e2e:install": "playwright install",
-    "test": "npm run e2e",
-    "prepare": "husky"
+    "e2e:install": "playwright install --with-deps",
+    "test": "npm run test:e2e",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:invite": "playwright test tests/e2e/invite-flow.spec.ts",
+    "test:e2e:local": "cross-env BASE_URL=http://localhost:3001 playwright test",
+    "test:e2e:invite:local": "cross-env BASE_URL=http://localhost:3001 playwright test tests/e2e/invite-flow.spec.ts",
+    "test:e2e:ci": "playwright test --reporter=line"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
@@ -37,6 +42,7 @@
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "autoprefixer": "10.4.20",
+    "cross-env": "^7.0.3",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.32",
     "eslint-config-prettier": "^9.1.2",

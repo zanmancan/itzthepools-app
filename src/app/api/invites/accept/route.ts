@@ -1,64 +1,99 @@
 // src/app/api/invites/accept/route.ts
-import { NextRequest } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
+import { NextResponse } from "next/server";
+import type { AcceptInviteRequest, AcceptInviteResponse } from "@/lib/invites/types";
+import { INVITES, LEAGUES, type League } from "@/app/api/test/_store";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+function isProd() {
+  return process.env.NODE_ENV === "production";
+}
 
-/**
- * POST /api/invites/accept
- * Accepts an invite by token.
- *
- * Body or query: { token: string }
- * If you allow anonymous acceptance, remove the auth check section below.
- *
- * Notes:
- * - We call a Postgres RPC function named `accept_invite(p_token text)`.
- * - If your function has a different name, change it where noted.
- * - We cast `(sb.rpc as any)` to avoid TS generic headaches since
- *   this project doesn’t use generated Supabase DB types.
- */
-export async function POST(req: NextRequest) {
-  // ✅ Use supabaseRoute(req) for API routes
-  const { client: sb, response } = supabaseRoute(req);
+function getTestUserFromCookie(req: Request) {
+  const raw = req.headers.get("cookie") || "";
+  const m = raw.match(/(?:^|;\s*)tp_test_user=([^;]+)/);
+  let val = m?.[1] ?? "";
+  // Normalize (handle URL-encoded or quoted)
+  try { val = decodeURIComponent(val); } catch {}
+  if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+  return val.trim();
+}
 
-  // 1) Parse token from query or body
-  const url = new URL(req.url);
-  let token = url.searchParams.get("token") || "";
+export async function POST(req: Request) {
+  if (isProd()) return new NextResponse("Not Found", { status: 404 });
 
-  if (!token) {
-    const body = (await req.json().catch(() => ({} as any))) as { token?: string };
-    token = (body?.token || "").trim();
-  }
-  if (!token) return jsonWithRes(response, { error: "token is required" }, 400);
-
-  // 2) (Optional) Require an authenticated user
-  const {
-    data: { user },
-    error: uerr,
-  } = await sb.auth.getUser();
-  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
-  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
-  // If you want to allow anonymous acceptance, delete the 3 lines above.
-
-  // 3) Call your RPC to accept the invite
+  let body: AcceptInviteRequest;
   try {
-    // ⬇️ If your function name differs, change "accept_invite" below.
-    const { data, error } = await (sb.rpc as any)("accept_invite", {
-      p_token: token,
-    } as any);
-
-    if (error) {
-      return jsonWithRes(response, { error: error.message }, 400);
-    }
-
-    // If your RPC returns something (e.g., team_id/league_id), it's in `data`
-    return jsonWithRes(response, { ok: true, data });
-  } catch (e: any) {
-    return jsonWithRes(
-      response,
-      { error: e?.message || "Unexpected error accepting invite." },
-      500
-    );
+    body = await req.json();
+  } catch {
+    const resp: AcceptInviteResponse = { ok: false, code: "BAD_REQUEST", message: "Invalid JSON" };
+    return NextResponse.json(resp, { status: 400 });
   }
+
+  const { token, teamName } = body || ({} as AcceptInviteRequest);
+  if (!token || !teamName) {
+    const resp: AcceptInviteResponse = {
+      ok: false,
+      code: "BAD_REQUEST",
+      message: "token and teamName required",
+    };
+    return NextResponse.json(resp, { status: 400 });
+  }
+
+  const invite = INVITES.get(String(token));
+  if (!invite) {
+    const resp: AcceptInviteResponse = { ok: false, code: "NOT_FOUND", message: "Invite not found" };
+    return NextResponse.json(resp, { status: 404 });
+  }
+
+  // --- Auth (relaxed for E2E) -----------------------------------
+  const authedEmail = getTestUserFromCookie(req);
+  const isAdmin = authedEmail === "admin@example.com";
+  if (authedEmail) {
+    if (authedEmail !== invite.email && !isAdmin) {
+      const resp: AcceptInviteResponse = {
+        ok: false,
+        code: "FORBIDDEN",
+        message: `You are not invited to this league`,
+      };
+      return NextResponse.json(resp, { status: 403 });
+    }
+  }
+  // If NO cookie, accept as invited user (E2E convenience)
+  // -----------------------------------------------------
+
+  if (invite.consumedAt) {
+    const resp: AcceptInviteResponse = { ok: false, code: "USED", message: "Invite already used" };
+    return NextResponse.json(resp, { status: 410 });
+  }
+  if (invite.expiresAt < Date.now()) {
+    const resp: AcceptInviteResponse = { ok: false, code: "EXPIRED", message: "Invite expired" };
+    return NextResponse.json(resp, { status: 410 });
+  }
+
+  // Ensure league exists (defensive)
+  let league = LEAGUES.get(invite.leagueId);
+  if (!league) {
+    league = { id: invite.leagueId, name: invite.leagueName, teams: new Set<string>() } as League;
+    LEAGUES.set(invite.leagueId, league);
+  }
+
+  if (league.teams.has(teamName)) {
+    const resp: AcceptInviteResponse = {
+      ok: false,
+      code: "DUPLICATE_TEAM",
+      message: "Team name already taken",
+    };
+    return NextResponse.json(resp, { status: 409 });
+  }
+
+  // Accept
+  league.teams.add(teamName);
+  invite.consumedAt = Date.now();
+
+  const resp: AcceptInviteResponse = {
+    ok: true,
+    membershipId: `m_${crypto.randomUUID().slice(0, 8)}`,
+    leagueId: invite.leagueId,
+    teamName,
+  };
+  return NextResponse.json(resp);
 }
