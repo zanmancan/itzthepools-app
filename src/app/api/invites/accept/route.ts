@@ -1,99 +1,93 @@
 // src/app/api/invites/accept/route.ts
 import { NextResponse } from "next/server";
-import type { AcceptInviteRequest, AcceptInviteResponse } from "@/lib/invites/types";
-import { INVITES, LEAGUES, type League } from "@/app/api/test/_store";
-
-function isProd() {
-  return process.env.NODE_ENV === "production";
-}
+import { INVITES, LEAGUES } from "@/app/api/test/_store";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function getTestUserFromCookie(req: Request) {
   const raw = req.headers.get("cookie") || "";
   const m = raw.match(/(?:^|;\s*)tp_test_user=([^;]+)/);
   let val = m?.[1] ?? "";
-  // Normalize (handle URL-encoded or quoted)
   try { val = decodeURIComponent(val); } catch {}
   if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
   return val.trim();
 }
 
+function normalizeTeamName(n?: unknown) {
+  const v = String(n ?? "").trim();
+  if (!v) return { ok: false as const, reason: "Team name required." };
+  if (v.length < 2) return { ok: false as const, reason: "Team name must be at least 2 characters." };
+  if (v.length > 30) return { ok: false as const, reason: "Team name must be 30 characters or fewer." };
+  if (!/^[A-Za-z0-9 _-]+$/.test(v)) return { ok: false as const, reason: "Only letters, numbers, spaces, dashes and underscores are allowed." };
+  return { ok: true as const, value: v };
+}
+
 export async function POST(req: Request) {
-  if (isProd()) return new NextResponse("Not Found", { status: 404 });
+  const email = getTestUserFromCookie(req);
+  const { token, teamName } = await req.json().catch(() => ({} as any));
 
-  let body: AcceptInviteRequest;
-  try {
-    body = await req.json();
-  } catch {
-    const resp: AcceptInviteResponse = { ok: false, code: "BAD_REQUEST", message: "Invalid JSON" };
-    return NextResponse.json(resp, { status: 400 });
-  }
-
-  const { token, teamName } = body || ({} as AcceptInviteRequest);
-  if (!token || !teamName) {
-    const resp: AcceptInviteResponse = {
-      ok: false,
-      code: "BAD_REQUEST",
-      message: "token and teamName required",
-    };
-    return NextResponse.json(resp, { status: 400 });
-  }
-
-  const invite = INVITES.get(String(token));
+  const invite = INVITES.get(String(token || ""));
   if (!invite) {
-    const resp: AcceptInviteResponse = { ok: false, code: "NOT_FOUND", message: "Invite not found" };
-    return NextResponse.json(resp, { status: 404 });
+    return NextResponse.json(
+      { ok: false, code: "NOT_FOUND", message: "Invite not found" },
+      { status: 404 }
+    );
   }
 
-  // --- Auth (relaxed for E2E) -----------------------------------
-  const authedEmail = getTestUserFromCookie(req);
-  const isAdmin = authedEmail === "admin@example.com";
-  if (authedEmail) {
-    if (authedEmail !== invite.email && !isAdmin) {
-      const resp: AcceptInviteResponse = {
-        ok: false,
-        code: "FORBIDDEN",
-        message: `You are not invited to this league`,
-      };
-      return NextResponse.json(resp, { status: 403 });
-    }
+  // Invite must belong to this user
+  if (invite.email !== email) {
+    return NextResponse.json(
+      { ok: false, code: "FORBIDDEN", message: "Invite does not belong to this user" },
+      { status: 403 }
+    );
   }
-  // If NO cookie, accept as invited user (E2E convenience)
-  // -----------------------------------------------------
 
+  // Expired / used checks
+  if (invite.expiresAt <= Date.now()) {
+    return NextResponse.json(
+      { ok: false, code: "EXPIRED", message: "Invite token expired" },
+      { status: 410 }
+    );
+  }
   if (invite.consumedAt) {
-    const resp: AcceptInviteResponse = { ok: false, code: "USED", message: "Invite already used" };
-    return NextResponse.json(resp, { status: 410 });
-  }
-  if (invite.expiresAt < Date.now()) {
-    const resp: AcceptInviteResponse = { ok: false, code: "EXPIRED", message: "Invite expired" };
-    return NextResponse.json(resp, { status: 410 });
+    return NextResponse.json(
+      { ok: false, code: "USED", message: "Invite already used" },
+      { status: 409 }
+    );
   }
 
-  // Ensure league exists (defensive)
-  let league = LEAGUES.get(invite.leagueId);
+  // Team validation + uniqueness
+  const team = normalizeTeamName(teamName);
+  if (!team.ok) {
+    return NextResponse.json(
+      { ok: false, code: "BAD_TEAM", message: team.reason },
+      { status: 400 }
+    );
+  }
+
+  const league = LEAGUES.get(invite.leagueId);
   if (!league) {
-    league = { id: invite.leagueId, name: invite.leagueName, teams: new Set<string>() } as League;
-    LEAGUES.set(invite.leagueId, league);
+    return NextResponse.json(
+      { ok: false, code: "LEAGUE_NOT_FOUND", message: "League missing" },
+      { status: 500 }
+    );
   }
 
-  if (league.teams.has(teamName)) {
-    const resp: AcceptInviteResponse = {
-      ok: false,
-      code: "DUPLICATE_TEAM",
-      message: "Team name already taken",
-    };
-    return NextResponse.json(resp, { status: 409 });
+  if (league.teams.has(team.value)) {
+    return NextResponse.json(
+      { ok: false, code: "TEAM_EXISTS", message: "Team name already taken" },
+      { status: 409 }
+    );
   }
 
   // Accept
-  league.teams.add(teamName);
+  league.teams.add(team.value);
   invite.consumedAt = Date.now();
 
-  const resp: AcceptInviteResponse = {
+  return NextResponse.json({
     ok: true,
     membershipId: `m_${crypto.randomUUID().slice(0, 8)}`,
     leagueId: invite.leagueId,
-    teamName,
-  };
-  return NextResponse.json(resp);
+    teamName: team.value,
+  });
 }

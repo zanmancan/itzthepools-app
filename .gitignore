@@ -34,3 +34,5 @@ test-results/
 
 .cache
 
+# TypeScript build cache
+tsconfig.tsbuildinfo

@@ -1,25 +1,41 @@
 // src/app/dashboard/page.tsx
-"use client";
+import Link from "next/link";
+import MyLeaguesCard from "@/components/MyLeaguesCard";
+import DashboardInvitesPanel from "@/components/DashboardInvitesPanel";
 
-/**
- * Minimal stub so E2E can assert invites panel + revoke button.
- * For now, always shows Revoke (we’re not testing admin UI logic yet).
- * Server-side routes will still block non-admin actions once we wire them.
- */
-export default function Dashboard() {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export default function Page() {
   return (
-    <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Dashboard</h1>
+    <main className="max-w-5xl mx-auto p-6 space-y-8">
+      <header className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <Link
+          href="/leagues/new"
+          className="rounded-lg border px-3 py-1 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          data-testid="header-new-league"
+        >
+          New league
+        </Link>
+      </header>
 
-      <section data-testid="invites-panel" className="border rounded p-4 space-y-3">
-        <h2 className="font-medium">Pending Invites</h2>
-        <div data-testid="invite-row" className="flex items-center justify-between">
-          <div>user@example.com → Test League</div>
-          <button data-testid="revoke-invite" className="border rounded px-3 py-1">
-            Revoke
-          </button>
-        </div>
+      <section
+        data-testid="pending-invite-banner"
+        className="rounded-lg border p-4 bg-amber-50 dark:bg-amber-900/20"
+      >
+        <p className="text-sm">
+          This dashboard shows your open invites and leagues for this session.
+        </p>
       </section>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left: invites (client-fetched) */}
+        <DashboardInvitesPanel />
+
+        {/* Right: My leagues */}
+        <MyLeaguesCard />
+      </div>
     </main>
   );
 }

@@ -1,0 +1,49 @@
+name: E2E
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      NODE_ENV: development
+      E2E_REAL: '1'
+      BASE_URL: 'http://localhost:3001'
+      NEXT_PUBLIC_E2E_DEV_SAFETY: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run dev server and tests (single worker for stability)
+        run: |
+          npx concurrently -k -s first \
+            "npm run dev" \
+            "npx wait-on tcp:3001 && cross-env E2E_REAL=1 BASE_URL=http://localhost:3001 playwright test --workers=1"
+
+      - name: Upload Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7

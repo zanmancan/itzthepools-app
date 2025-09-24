@@ -3,8 +3,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { formatLocal } from "@/lib/time";
-import type { InviteContext, AcceptInviteResponse } from "@/lib/invites/types";
+
+type InviteContext =
+  | {
+      ok: true;
+      leagueId: string;
+      leagueName: string;
+      token: string;
+      expiresAt: number;
+      consumedAt: number | null;
+    }
+  | { ok: false; code: "NOT_FOUND" | "EXPIRED" | "USED"; message: string };
+
+type AcceptInviteResponse =
+  | { ok: true; membershipId: string; leagueId: string; teamName: string }
+  | { ok: false; code: string; message: string };
 
 type Props = { params: { token: string } };
 
@@ -12,134 +25,173 @@ function validateTeamName(name: string) {
   const n = name.trim();
   if (n.length < 2) return "Team name must be at least 2 characters.";
   if (n.length > 30) return "Team name must be 30 characters or fewer.";
-  if (!/^[A-Za-z0-9 _-]+$/.test(n)) return "Only letters, numbers, spaces, dashes and underscores are allowed.";
+  if (!/^[A-Za-z0-9 _-]+$/.test(n))
+    return "Only letters, numbers, spaces, dashes and underscores are allowed.";
   return null;
 }
 
-export default function InvitePage({ params }: Props) {
-  const token = params.token;
-
+export default function Page({ params }: Props) {
+  const { token } = params;
+  const [ctx, setCtx] = useState<InviteContext | null>(null);
+  const [team, setTeam] = useState("");
+  const [teamError, setTeamError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
 
-  const [teamName, setTeamName] = useState("");
-  const [leagueName, setLeagueName] = useState<string>("");
-  const [expiresAt, setExpiresAt] = useState<number>(0);
-
-  const [ctxLoading, setCtxLoading] = useState(true);
-  const [ctxError, setCtxError] = useState<string>("");
-
-  const teamError = useMemo(() => validateTeamName(teamName), [teamName]);
-
-  // Cache/restore team name (nice UX, not required by tests)
+  // Load invite context
   useEffect(() => {
-    const cached = localStorage.getItem(`invite-teamname:${token}`);
-    if (cached) setTeamName(cached);
-  }, [token]);
-
-  // Load invite context; show error for expired/used
-  useEffect(() => {
-    let mounted = true;
+    let active = true;
     (async () => {
-      setCtxLoading(true);
-      setCtxError("");
       try {
-        const res = await fetch(`/api/invites/context?token=${encodeURIComponent(token)}`, { cache: "no-store" });
-        const data: InviteContext = await res.json();
-        if (!mounted) return;
-        if (!res.ok || !data?.ok) {
-          setCtxError((data as any)?.code ?? `Error ${res.status}`);
-        } else {
-          setLeagueName(data.leagueName);
-          setExpiresAt(data.expiresAt);
+        const res = await fetch(
+          `/api/invites/context?token=${encodeURIComponent(token)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as InviteContext;
+        if (active) {
+          setCtx(json);
+          // If API returned an error object, surface it as a toast (what the spec expects)
+          if (!json.ok) setToast(json.message || "Invite unavailable");
         }
-      } catch (e: any) {
-        if (mounted) setCtxError(e?.message ?? "Network error");
-      } finally {
-        if (mounted) setCtxLoading(false);
+      } catch {
+        if (active) {
+          const err = {
+            ok: false as const,
+            code: "NOT_FOUND" as const,
+            message: "Failed to load invite",
+          };
+          setCtx(err);
+          setToast(err.message);
+        }
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      active = false;
+    };
   }, [token]);
 
-  function onTeamChange(v: string) {
-    setTeamName(v);
-    try { localStorage.setItem(`invite-teamname:${token}`, v); } catch {}
-  }
+  // Live-validate team
+  useEffect(() => {
+    setTeamError(validateTeamName(team));
+  }, [team]);
+
+  const expiresStr = useMemo(() => {
+    if (!ctx || !ctx.ok) return "";
+    return new Date(ctx.expiresAt).toLocaleString();
+  }, [ctx]);
 
   async function onAccept() {
+    setToast(null);
+    if (!ctx || !ctx.ok) return;
+    const err = validateTeamName(team);
+    if (err) {
+      setTeamError(err);
+      return;
+    }
     setBusy(true);
-    setToast("");
-
     try {
-      if (teamError) {
-        setToast(teamError);
-        setBusy(false);
-        return;
-      }
-
       const res = await fetch("/api/invites/accept", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ token, teamName }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: ctx.token, teamName: team }),
       });
-      const data: AcceptInviteResponse = await res.json();
-
-      if (!res.ok || !data?.ok) {
-        setToast(`${(data as any)?.code ?? res.status}: ${(data as any)?.message ?? "Failed"}`);
+      const json = (await res.json()) as AcceptInviteResponse;
+      if (!res.ok || !("ok" in json) || json.ok !== true) {
+        setToast((json as any)?.message ?? "Failed to accept invite");
         setBusy(false);
         return;
       }
-
-      try { localStorage.removeItem(`invite-teamname:${token}`); } catch {}
-      // E2E asserts this target
-      window.location.href = `/leagues/${data.leagueId}`;
-    } catch (e: any) {
-      setToast(e?.message ?? "Unexpected error");
+      // E2E expects /leagues/:id (plural)
+      window.location.href = `/leagues/${json.leagueId}`;
+    } catch {
+      setToast("Network error. Please try again.");
       setBusy(false);
     }
   }
 
-  if (ctxLoading) return <main className="p-6 max-w-xl mx-auto">Loading invite…</main>;
-
-  // Error state (expired/used/etc)
-  if (ctxError) {
+  // Loading state
+  if (!ctx) {
     return (
-      <main className="p-6 max-w-xl mx-auto space-y-3">
-        <div data-testid="pending-invite-banner" className="rounded border p-3 bg-yellow-50">
-          Invite error
+      <main className="max-w-xl mx-auto p-6 space-y-4">
+        <div
+          data-testid="pending-invite-banner"
+          className="rounded-lg border p-4 bg-amber-50"
+        >
+          <p className="text-sm">
+            You’re viewing an invite. Enter a team name to join.
+          </p>
         </div>
-        <div data-testid="toast" role="status" className="text-red-600">{ctxError}</div>
-        <Link className="underline" href="/dashboard">Go to dashboard</Link>
+        <p>Loading…</p>
       </main>
     );
   }
 
+  // Error states (EXPIRED / USED / NOT_FOUND) — show banner + toast
+  if (!ctx.ok) {
+    return (
+      <main className="max-w-xl mx-auto p-6 space-y-4">
+        <div
+          data-testid="pending-invite-banner"
+          className="rounded-lg border p-4 bg-amber-50"
+        >
+          <p className="text-sm">
+            This invite could not be used. You can return to your dashboard.
+          </p>
+        </div>
+
+        {/* Toast required by the test: either [data-testid="toast"] or [role="status"] */}
+        <div
+          data-testid="toast"
+          role="status"
+          className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          {toast ?? ctx.message}
+        </div>
+
+        <h1 className="text-xl font-semibold">Invite</h1>
+        <p className="text-sm text-gray-700">{ctx.message}</p>
+        <p>
+          <Link className="underline" href="/dashboard">
+            Back to Dashboard
+          </Link>
+        </p>
+      </main>
+    );
+  }
+
+  // Happy path
   return (
-    <div className="container mx-auto max-w-2xl p-6 space-y-4">
-      <div data-testid="pending-invite-banner" className="rounded-md border p-3">
-        You have a pending invite.
+    <div className="max-w-xl mx-auto p-6 space-y-4">
+      <div
+        data-testid="pending-invite-banner"
+        className="rounded-lg border p-4 bg-amber-50"
+      >
+        <p className="text-sm">
+          This invite will add you to the league once you submit a valid team
+          name.
+        </p>
       </div>
 
-      <h1 className="text-2xl font-semibold">
-        Join <span data-testid="invite-league-name">{leagueName}</span>
+      {/* Spec asserts the league name using this id */}
+      <h1 data-testid="invite-league-name" className="text-xl font-semibold">
+        Join — {ctx.leagueName}
       </h1>
+      <p className="text-sm text-gray-600">Expires: {expiresStr}</p>
 
-      {expiresAt > 0 && <p className="text-sm opacity-70">Expires {formatLocal(expiresAt)}</p>}
-
-      <label htmlFor="teamName" className="block text-sm">Team name</label>
-      <input
-        id="teamName"
-        name="teamName"
-        data-testid="team-name-input"
-        className="border rounded px-3 py-2 w-full"
-        value={teamName}
-        onChange={(e) => onTeamChange(e.target.value)}
-        placeholder="Your team name"
-        autoComplete="off"
-        maxLength={30}
-      />
+      <label className="block space-y-1">
+        <span className="text-sm">Team name</span>
+        <input
+          name="teamName"
+          data-testid="team-name-input"
+          className="w-full rounded border px-3 py-2"
+          value={team}
+          onChange={(e) => setTeam(e.target.value)}
+          placeholder="Enter your team name"
+        />
+        {teamError && (
+          <span className="text-xs text-red-600">{teamError}</span>
+        )}
+      </label>
 
       <button
         data-testid="accept-invite"
@@ -150,7 +202,15 @@ export default function InvitePage({ params }: Props) {
         {busy ? "Accepting…" : "Accept invite"}
       </button>
 
-      {toast && <div data-testid="toast" role="status" className="mt-3 text-sm text-red-600">{toast}</div>}
+      {toast && (
+        <div
+          data-testid="toast"
+          role="status"
+          className="mt-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

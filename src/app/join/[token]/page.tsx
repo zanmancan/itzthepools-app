@@ -96,7 +96,6 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     setChecking(true);
 
     const t = setTimeout(() => {
-      // schedule a sync callback, run async work inside
       void (async () => {
         try {
           const { data, error } = await supabase.rpc("is_team_name_available", {
@@ -153,8 +152,8 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       if (!res.ok) throw new Error(await res.text());
       addToast("Joined league!", "success");
       clearPendingInvite();
-      // go to league or dashboard
-      window.location.href = `/league/${league.id}`;
+      // ✅ redirect to plural path
+      window.location.href = `/leagues/${league.id}`;
     } catch (e: any) {
       setAcceptErr(e?.message ?? "Failed to accept invite");
       addToast("Failed to accept invite", "error");

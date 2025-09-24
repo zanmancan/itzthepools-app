@@ -1,20 +1,20 @@
 // src/app/api/test/_store.ts
-// Simple in-memory store shared by test-only routes and (temporarily)
-// by the "real" invite routes until the DB is wired.
+// In-memory store for dev/E2E. Lives on globalThis so it survives hot reloads.
 
 export type Invite = {
   token: string;
-  email: string;         // invited email
+  email: string;          // invited email
   leagueId: string;
   leagueName: string;
-  expiresAt: number;     // epoch ms (UTC)
+  expiresAt: number;      // epoch ms
   consumedAt?: number | null;
 };
 
 export type League = {
   id: string;
   name: string;
-  teams: Set<string>;    // team names (unique per league)
+  teams: Set<string>;
+  ownerEmail?: string | null; // ← NEW: who created the league (tp_test_user)
 };
 
 const g = globalThis as any;

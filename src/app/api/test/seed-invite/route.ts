@@ -1,61 +1,83 @@
 // src/app/api/test/seed-invite/route.ts
 import { NextResponse } from "next/server";
 import { INVITES, LEAGUES, type League } from "../_store";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function isProd() {
   return process.env.NODE_ENV === "production";
 }
 
+/**
+ * Dev-only: seed an invite.
+ * Body:
+ *   {
+ *     email: string,              // required
+ *     expiresInMins?: number,     // optional (default 60)
+ *     leagueId?: string | null    // optional: if provided and exists, use it; otherwise
+ *                                 // - if omitted, we REUSE an existing league if any,
+ *                                 //   else we create one. This enables duplicate-name tests.
+ *   }
+ */
 export async function POST(request: Request) {
-  if (isProd()) {
-    return new NextResponse("Not Found", { status: 404 });
-  }
+  if (isProd()) return new NextResponse("Not Found", { status: 404 });
 
   try {
-    const { email, expiresInMins } = await request.json();
-    if (!email || typeof email !== "string") {
+    const body = await request.json().catch(() => ({}));
+    const email = String(body?.email || "").trim();
+    const expiresInMins = Number.isFinite(body?.expiresInMins)
+      ? Number(body.expiresInMins)
+      : 60;
+    const requestedLeagueId = body?.leagueId
+      ? String(body.leagueId).trim()
+      : "";
+
+    if (!email) {
       return NextResponse.json(
-        { ok: false, code: "BAD_REQUEST", message: "email is required" },
+        { ok: false, code: "BAD_REQUEST", message: "email required" },
         { status: 400 }
       );
     }
 
-    // Create (or reuse) a single test league in memory
-    let league: League | undefined;
-    for (const l of LEAGUES.values()) {
-      league = l; break;
-    }
-    if (!league) {
-      league = {
-        id: `test-league-${crypto.randomUUID().slice(0, 6)}`,
-        name: "Test League",
-        teams: new Set<string>(),
-      };
-      LEAGUES.set(league.id, league);
+    // Pick league:
+    // 1) If leagueId is provided and exists, use it.
+    // 2) Else, if there is at least one existing league in the store, reuse the first one.
+    // 3) Else, create a fresh league.
+    let leagueId = requestedLeagueId;
+    let leagueName = "Test League";
+
+    if (leagueId && LEAGUES.has(leagueId)) {
+      leagueName = LEAGUES.get(leagueId)!.name;
+    } else if (LEAGUES.size > 0) {
+      const first = LEAGUES.values().next().value as League;
+      leagueId = first.id;
+      leagueName = first.name;
+    } else {
+      leagueId = `lg_${crypto.randomUUID().slice(0, 8)}`;
+      const league: League = { id: leagueId, name: leagueName, teams: new Set() };
+      LEAGUES.set(leagueId, league);
     }
 
-    const token = crypto.randomUUID().replace(/-/g, "");
-    const ttl = typeof expiresInMins === "number" ? expiresInMins : 60;
-    const expiresAt = Date.now() + ttl * 60_000;
+    const token = `tk_${crypto.randomUUID().slice(0, 12)}`;
+    const expiresAt = Date.now() + expiresInMins * 60_000;
 
     INVITES.set(token, {
       token,
       email,
-      leagueId: league.id,
-      leagueName: league.name,
+      leagueId,
+      leagueName,
       expiresAt,
       consumedAt: null,
     });
 
-    const origin = new URL(request.url).origin;
-    const inviteUrl = `${origin}/test/invite/${token}`;
+    const inviteUrl = `/invite/${token}`;
 
     return NextResponse.json({
       ok: true,
       inviteUrl,
-      leagueName: league.name,
+      leagueName,
       token,
-      leagueId: league.id,
+      leagueId,
       email,
       expiresAt,
     });

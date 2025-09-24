@@ -1,64 +1,98 @@
 // src/app/api/invites/bulk-create/route.ts
-import { NextRequest } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
+import { NextResponse } from "next/server";
+import { INVITES, LEAGUES } from "@/app/api/test/_store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function getViewerEmail(req: Request): string {
+  const raw = req.headers.get("cookie") || "";
+  const m = raw.match(/(?:^|;\s*)tp_test_user=([^;]+)/);
+  let val = m?.[1] ?? "";
+  try { val = decodeURIComponent(val); } catch {}
+  if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+  return val.trim();
+}
+
+function validEmail(s: string): boolean {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+}
+
+type BulkCreateBody = {
+  leagueId?: unknown;
+  emails?: unknown;
+  expiresInMins?: unknown;
+};
+
 /**
  * POST /api/invites/bulk-create
- * Body: { leagueId: string; emails: string[]; days?: number }
- * Creates multiple **email** invites for a league (owner/admin only).
+ * Body: { leagueId: string, emails: string[], expiresInMins?: number }
+ * Auth: admin@example.com only
  */
-export async function POST(req: NextRequest) {
-  const { client: sb, response } = supabaseRoute(req);
+export async function POST(req: Request) {
+  const caller = getViewerEmail(req);
+  if (caller !== "admin@example.com") {
+    return NextResponse.json(
+      { ok: false, code: "FORBIDDEN", message: "Admin only." },
+      { status: 403 }
+    );
+  }
 
-  const { leagueId, emails, days }: { leagueId?: string; emails?: string[]; days?: number } =
-    await req.json().catch(() => ({} as any));
+  const raw: BulkCreateBody = await req.json().catch(() => ({} as BulkCreateBody));
 
-  if (!leagueId) return jsonWithRes(response, { error: "leagueId is required" }, 400);
+  const leagueId: string = String(raw.leagueId ?? "").trim();
+  const rawEmails: unknown[] = Array.isArray(raw.emails) ? (raw.emails as unknown[]) : [];
+  const expiresInMinsNum =
+    typeof raw.expiresInMins === "number" && raw.expiresInMins > 0
+      ? raw.expiresInMins
+      : 60;
 
-  const list = Array.isArray(emails) ? emails.map((e) => String(e || "").trim()).filter(Boolean) : [];
-  if (list.length === 0) return jsonWithRes(response, { error: "emails[] is required" }, 400);
+  if (!leagueId || !LEAGUES.has(leagueId)) {
+    return NextResponse.json(
+      { ok: false, code: "BAD_LEAGUE", message: "League not found." },
+      { status: 404 }
+    );
+  }
+  const league = LEAGUES.get(leagueId)!;
 
-  const {
-    data: { user },
-    error: uerr,
-  } = await sb.auth.getUser();
-  if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
-  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
+  // Normalize, de-dupe, and strongly type as string[]
+  const cleaned: string[] = Array.from(
+    new Set(
+      rawEmails
+        .map((e: unknown) => String(e ?? "").trim().toLowerCase())
+        .filter((s: string) => s.length > 0)
+    )
+  );
 
-  // Permission: owner/admin
-  const lmRes: any = await sb
-    .from("league_members")
-    .select("role")
-    .eq("league_id", leagueId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (lmRes?.error) return jsonWithRes(response, { error: lmRes.error.message }, 500);
+  const invalid: string[] = cleaned.filter((e: string) => !validEmail(e));
+  if (invalid.length > 0) {
+    return NextResponse.json(
+      { ok: false, code: "BAD_EMAILS", message: `Invalid emails: ${invalid.join(", ")}` },
+      { status: 400 }
+    );
+  }
 
-  const role = String(lmRes?.data?.role || "").toLowerCase();
-  if (!(role === "owner" || role === "admin")) return jsonWithRes(response, { error: "Forbidden" }, 403);
+  const created: Array<{ token: string; email: string }> = [];
+  const expiresAt: number = Date.now() + expiresInMinsNum * 60_000;
 
-  const now = Date.now();
-  const ttlDays = Number.isFinite(days) && days! > 0 ? days! : 7;
-  const expiresAt = new Date(now + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+  for (const email of cleaned) {
+    const token = `tk_${crypto.randomUUID().slice(0, 12)}`;
+    INVITES.set(token, {
+      token,
+      email,                   // string
+      leagueId,                // string
+      leagueName: league.name, // string
+      expiresAt,               // number
+      consumedAt: null,
+    });
+    created.push({ token, email });
+  }
 
-  const rows = list.map((email) => ({
-    league_id: leagueId,
-    email,
-    token: crypto.randomUUID().replace(/-/g, ""),
-    invited_by: user.id,
-    accepted: false,
-    created_at: new Date().toISOString(),
-    expires_at: expiresAt,
-    revoked_at: null,
-    is_public: false,
-  }));
-
-  // Insert (avoid generics; select back created rows)
-  const insRes: any = await (sb.from("invites") as any).insert(rows).select();
-  if (insRes?.error) return jsonWithRes(response, { error: insRes.error.message }, 400);
-
-  return jsonWithRes(response, { ok: true, created: Array.isArray(insRes.data) ? insRes.data : [] });
+  return NextResponse.json({
+    ok: true,
+    leagueId,
+    count: created.length,
+    invites: created,
+    expiresAt,
+  });
 }
