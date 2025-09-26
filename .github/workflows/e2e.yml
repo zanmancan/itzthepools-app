@@ -11,7 +11,6 @@ jobs:
   playwright:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     env:
       NODE_ENV: development
       E2E_REAL: '1'
@@ -34,7 +33,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
 
-      - name: Run dev server and tests (single worker for stability)
+      - name: Run dev server and tests
         run: |
           npx concurrently -k -s first \
             "npm run dev" \

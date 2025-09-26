@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import Nav from "@/components/Nav";
 import ToastProvider from "@/components/Toast";
 import { supabaseServer } from "@/lib/supabaseServer";
+import DevSafetyBadge from "@/app/(shared)/DevSafetyBadge";
 
 export const metadata: Metadata = {
   title: "Itz The Pools",
@@ -39,6 +40,9 @@ export default async function RootLayout({
 
         <div className="container">
           <Nav isAuthed={isAuthed} />
+          {/* Dev-only visual flag */}
+          <div className="mt-2"><DevSafetyBadge /></div>
+
           <main id="app-main" role="main" className="mt-6" data-testid="app-main">
             <ToastProvider>{children}</ToastProvider>
           </main>

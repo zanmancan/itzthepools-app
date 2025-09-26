@@ -1,38 +1,40 @@
 // src/app/leagues/[leagueId]/page.tsx
-"use client";
+/**
+ * League Home (Open from Kebab)
+ * - SSR: loads league from the dev in-memory store
+ * - Renders a minimal header with name + id
+ * - 404 if the league id doesn't exist
+ */
 
-import Link from "next/link";
+import { notFound } from "next/navigation";
+import { getLeague } from "@/app/api/test/_store";
 
-export const runtime = "nodejs";
+type PageProps = { params: { leagueId: string } };
+
 export const dynamic = "force-dynamic";
 
-export default function LeaguePage({ params }: { params: { leagueId: string } }) {
-  const { leagueId } = params;
+export default async function LeaguePage({ params }: PageProps) {
+  const leagueId = params?.leagueId;
+  const lg = leagueId ? getLeague(leagueId) : null;
+  if (!lg) return notFound();
 
   return (
-    <main className="max-w-3xl mx-auto p-6 space-y-4">
-      <h1
-        data-testid="league-header"
-        id="league-header"
-        className="text-2xl font-semibold"
-      >
-        League
-      </h1>
+    <section className="space-y-4" data-testid="league-page">
+      <header className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <h1 className="text-xl font-semibold" data-testid="league-header">
+          {lg.name}
+        </h1>
+        <p className="text-xs text-neutral-400">
+          League ID: <code className="opacity-75">{lg.id}</code>
+        </p>
+      </header>
 
-      <div className="text-sm text-gray-500">ID: {leagueId}</div>
-
-      <div className="rounded border p-4">
-        <p>Welcome! Minimal placeholder so E2E can assert the header.</p>
-        <p className="mt-2">
-          <Link className="underline" href={`/leagues/${leagueId}/invites/bulk`}>
-            Bulk invites
-          </Link>
-          {" · "}
-          <Link className="underline" href="/dashboard">
-            Back to Dashboard
-          </Link>
+      {/* Placeholder body — we can add tabs/standings later */}
+      <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+        <p className="text-sm text-neutral-300">
+          Welcome to the league home. Settings and bulk invites live under the Kebab.
         </p>
       </div>
-    </main>
+    </section>
   );
 }

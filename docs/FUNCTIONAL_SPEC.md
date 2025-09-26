@@ -1,49 +1,76 @@
-# The Pools — Functional Spec
+# Functional Spec — itzThePools (Day 7 Snapshot)
 
-## 1. Invite → Create Account → Join League
+This spec lists acceptance criteria in Given/When/Then form and tags each with an ID (TID-###). We also mark which criteria are covered by E2E today.
 
-### 1.1 Summary (User Story)
+## Leagues: Kebab actions
 
-As an invited player, when I click an invite link, I land on an invite-specific Create Account page, finish auth, enter a unique team name, and join the league. If the token is expired or reused, I get a clear error and next steps.
+- **TID-001** (COVERED)
 
-### 1.2 UX / Flows
+  - **Given** I am on Dashboard with at least one league row
+  - **When** I click the kebab and choose **Invite**
+  - **Then** I am routed to `/leagues/:id/invites/bulk`
 
-- **Entry points**
-  - Invite link → Invite Create Account page (with league context)
-  - General /signup → General Create Account page (no league context)
-- **States**
-  - Pending invite banner on dashboard
-  - Invite list with Revoke (owner/admin)
-  - Errors: 401 unauth, 403 forbidden, 409 duplicate team, 410 expired/reused
-- **Post-auth redirect**
-  - Invite path → Team Name & Accept
-  - General path → Dashboard
+- **TID-002** (Future)
 
-### 1.3 Acceptance Criteria (must be true)
+  - **Given** I open the kebab
+  - **When** I click **Open**
+  - **Then** I am routed to `/leagues/:id`
 
-- Invite URL renders the invite signup page with league name, sport/ruleset, season.
-- Non-invite signup renders the general page.
-- Accept with unique team name succeeds; membership created.
-- Duplicate name returns 409 with guidance; no membership created.
-- Expired/reused token returns 410/409; no membership created.
-- Dashboard shows invites panel + banner + revoke (owner/admin).
+- **TID-003** (Future)
+  - **Given** I open the kebab
+  - **When** I click **Settings**
+  - **Then** I am routed to `/leagues/:id/settings`
 
-### 1.4 API Contracts (arrays only)
+## Bulk Invites: Auth Guard
 
-- `GET /api/invites` → `{ data: Invite[], error: null }`
-- `POST /api/invites/accept` →
-  - **200** `{ ok:true, membership_id, league_id, team_name }`
-  - **4xx** `{ ok:false, code: "UNAUTHORIZED"|"FORBIDDEN"|"NOT_FOUND"|"EXPIRED"|"ALREADY_MEMBER"|"DUPLICATE_TEAM"|"USED", message }`
+- **TID-010** (COVERED)
 
-### 1.5 Data & RLS
+  - **Given** I am not an admin/owner of the league
+  - **When** I visit `/leagues/:id/invites/bulk`
+  - **Then** I see a visible 403 indication (guard banner)
 
-- `invites`: `id, league_id, invited_user_id/email, token_hash, expires_at, consumed_at, revoked_at`
-- **Rules**
-  - One-time tokens (`consumed_at` set on success)
-  - Members see own invites; admins see league invites
-  - Unique team names per league
+- **TID-011** (COVERED)
+  - **Given** I am the league owner
+  - **When** I visit `/leagues/:id/invites/bulk`
+  - **Then** I see the bulk invites page
 
-### 1.6 Open Questions / Future
+## Bulk Invites: Form basics
 
-- Multi-sport copy variants on invite page (PGA, word/crossword)
-- Optional SSO providers; magic link is baseline
+- **TID-020** (COVERED)
+
+  - **Given** the bulk invites UI
+  - **When** I paste 3 valid emails and click **Send Invites**
+  - **Then** I see 3 list items under `[data-testid="bulk-result"]`
+
+- **TID-021** (COVERED)
+  - **Given** the bulk invites UI
+  - **When** I include invalid emails
+  - **Then** I see a toast containing the text “Invalid emails”
+
+## Dashboard: Invites listing & revoke
+
+- **TID-030** (COVERED)
+
+  - **Given** invites were created for my league
+  - **When** I view the dashboard
+  - **Then** I see rows under `[data-testid="pending-invites"]`
+
+- **TID-031** (COVERED)
+
+  - **Given** I am the owner of a league with pending invites
+  - **When** I view the dashboard
+  - **Then** I see a **Revoke** button on those rows
+
+- **TID-032** (COVERED)
+  - **Given** I click **Revoke**
+  - **When** the revoke succeeds
+  - **Then** the invite disappears from the list
+
+## Accessibility & Dev flags
+
+- **TID-040** (COVERED)
+  - **Given** NEXT_PUBLIC_E2E_DEV_SAFETY=1
+  - **When** I load any page
+  - **Then** a subtle DEV badge is visible
+
+> E2E coverage: TID-001, 010, 011, 020, 021, 030, 031, 032, 040.

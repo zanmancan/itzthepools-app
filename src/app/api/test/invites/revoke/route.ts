@@ -1,8 +1,4 @@
-// src/app/api/invites/revoke/route.ts
-// Dev-only proxy that matches the test's expected path.
-// For NON-PROD, it performs the revoke directly against the in-memory store.
-// In production, returns 404 (app’s real revoke would live elsewhere).
-
+// src/app/api/test/invites/revoke/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getLeague, revokeInvite, INVITES } from "@/app/api/test/_store";
@@ -18,6 +14,11 @@ function viewer(): string {
   try { return decodeURIComponent(raw); } catch { return raw; }
 }
 
+/**
+ * POST /api/test/invites/revoke
+ * body: { token: string }
+ * - Only the league owner can revoke.
+ */
 export async function POST(req: Request) {
   if (isProd()) return new NextResponse("Not Found", { status: 404 });
 
