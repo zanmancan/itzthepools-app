@@ -1,42 +1,56 @@
 "use client";
 
 /**
- * Guard — 403 Not Authorized banner for bulk invites
- * - Minimal, testable visible indicator
- * - Shows a dev banner when NEXT_PUBLIC_E2E_DEV_SAFETY=1
+ * Bulk Invites Guard
+ * - Renders a visible 403 for users who are not owner/admin.
+ * - When NEXT_PUBLIC_E2E_DEV_SAFETY=1, shows a small dev banner for assertions.
  */
-
 import React from "react";
 
-export default function Guard({ leagueId }: { leagueId: string }) {
-  const dev = process.env.NEXT_PUBLIC_E2E_DEV_SAFETY === "1";
+type Props = {
+  role: "owner" | "admin" | "member" | null | undefined;
+  children?: React.ReactNode;
+};
 
+function DevBanner() {
+  if (typeof window === "undefined") return null;
+  if (process.env.NEXT_PUBLIC_E2E_DEV_SAFETY !== "1") return null;
   return (
     <div
-      className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-4"
-      data-testid="guard-403"
-      aria-live="polite"
+      data-testid="guard-403-dev-banner"
+      className="mt-3 inline-block rounded bg-yellow-900/40 px-2 py-1 text-xs text-yellow-200"
+      aria-label="Dev Safety Banner"
     >
-      <div className="text-red-700 dark:text-red-300 font-semibold mb-1">
-        403 — Not Authorized
+      Dev: Guard active (E2E safety)
+    </div>
+  );
+}
+
+export default function Guard({ role, children }: Props) {
+  const allowed = role === "owner" || role === "admin";
+
+  if (allowed) {
+    // Authorized: render actual page UI
+    return <>{children}</>;
+  }
+
+  // Forbidden: render visible 403
+  return (
+    <div className="mx-auto max-w-2xl rounded-xl border border-red-700/60 bg-red-950/40 p-6 text-red-100">
+      <h2 className="mb-2 text-xl font-semibold">403 — Not authorized</h2>
+      <p className="text-sm opacity-90">
+        You must be an <strong>owner</strong> or <strong>admin</strong> of this league to access Bulk Invites.
+      </p>
+
+      <div
+        data-testid="guard-403"
+        className="mt-4 rounded-md border border-red-700/70 bg-red-950/60 px-3 py-2 text-sm"
+        aria-live="polite"
+      >
+        Access blocked for this account.
       </div>
-      <div className="text-sm text-red-800/80 dark:text-red-300/80">
-        You do not have permission to manage bulk invites for league{" "}
-        <span className="font-mono">{leagueId}</span>.
-      </div>
-      <div className="mt-3">
-        <a href="/dashboard" className="text-sm text-blue-600 hover:underline">
-          Return to Dashboard
-        </a>
-      </div>
-      {dev && (
-        <div
-          className="mt-3 text-[11px] px-2 py-1 inline-flex rounded-md border border-amber-300 bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200 dark:border-amber-700"
-          data-testid="guard-403-dev-banner"
-        >
-          Dev mode: visible indication (NEXT_PUBLIC_E2E_DEV_SAFETY=1)
-        </div>
-      )}
+
+      <DevBanner />
     </div>
   );
 }

@@ -69,9 +69,3 @@ export async function getMyPendingInvites() {
   return { data: data ?? null, error };
 }
 
-export async function acceptInviteByToken(token: string) {
-  const sb = supabaseServer();
-  // Calls the SQL function we created (returns league_id on success)
-  const { data, error } = await sb.rpc("accept_invite", { p_token: token });
-  return { leagueId: (data as string | null) ?? null, error };
-}

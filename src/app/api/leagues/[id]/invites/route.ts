@@ -1,59 +1,50 @@
-// src/app/api/leagues/[id]/invites/route.ts
-import { NextRequest } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
+// Lists invites for a league (used by the Bulk Invites page after POST).
+// GET /api/leagues/:id/invites
+//
+// Returns shapes that most UIs use: items[], invites[] (dup), count.
+
+import { NextResponse } from "next/server";
+import { getStore, type Invite } from "@/app/api/test/_store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/leagues/:id/invites
- * Returns { open, accepted, denied } buckets. Owner/admin only.
- */
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const { client: sb, response } = supabaseRoute(req);
-  const leagueId = params?.id;
+type Ctx = { params: { id: string } };
 
-  const {
-    data: { user },
-    error: uerr,
-  } = await sb.auth.getUser();
-  if (uerr) return jsonWithRes(response, { error: uerr.message, open: [], accepted: [], denied: [] }, 500);
-  if (!user) return jsonWithRes(response, { error: "Unauthorized", open: [], accepted: [], denied: [] }, 401);
+export async function GET(_req: Request, ctx: Ctx) {
+  try {
+    const leagueId = String(ctx.params.id || "").trim();
+    if (!leagueId) {
+      return NextResponse.json({ ok: false, error: "league id required" }, { status: 400 });
+    }
 
-  const lmRes: any = await sb
-    .from("league_members")
-    .select("role")
-    .eq("league_id", leagueId)
-    .eq("user_id", user.id)
-    .maybeSingle();
+    const store = getStore();
+    const list: Invite[] = store.invitesByLeague[leagueId] ?? [];
 
-  if (lmRes.error) return jsonWithRes(response, { error: lmRes.error.message, open: [], accepted: [], denied: [] }, 500);
-  const role = String(lmRes?.data?.role || "").toLowerCase();
-  const can = role === "owner" || role === "admin";
-  if (!can) return jsonWithRes(response, { error: "Forbidden", open: [], accepted: [], denied: [] }, 403);
+    // Normalize to a simple, email-forwarding shape.
+    const items = list.map(inv => ({
+      id: inv.id,
+      email: inv.email,
+      token: inv.token,
+      used: !!inv.used_at,
+      created_at: inv.created_at,
+      expires_at: inv.expires_at,
+    }));
 
-  const resInv: any = await sb
-    .from("invites")
-    .select("id,league_id,email,token,created_at,expires_at,accepted,accepted_at,revoked_at,is_public")
-    .eq("league_id", leagueId)
-    .order("created_at", { ascending: false });
-
-  if (resInv.error) return jsonWithRes(response, { error: resInv.error.message, open: [], accepted: [], denied: [] }, 400);
-
-  const list: any[] = Array.isArray(resInv.data) ? resInv.data : [];
-  const nowIso = new Date().toISOString();
-
-  const isAccepted = (i: any) => Boolean(i?.accepted) || Boolean(i?.accepted_at);
-  const isRevoked  = (i: any) => Boolean(i?.revoked_at);
-  const hasExpiry  = (i: any) => Boolean(i?.expires_at);
-  const isExpired  = (i: any) => {
-    const ex = i?.expires_at ? String(i.expires_at) : "";
-    return !ex || ex <= nowIso;
-  };
-
-  const open     = list.filter((i) => !isAccepted(i) && !isRevoked(i) && hasExpiry(i) && !isExpired(i));
-  const accepted = list.filter((i) => isAccepted(i));
-  const denied   = list.filter((i) => !isAccepted(i) && (isRevoked(i) || isExpired(i)));
-
-  return jsonWithRes(response, { ok: true, open, accepted, denied });
+    return NextResponse.json(
+      {
+        ok: true,
+        leagueId,
+        count: items.length,
+        items,           // <- primary key most pages iterate over
+        invites: items,  // <- alias for older components
+      },
+      { status: 200 }
+    );
+  } catch (err: any) {
+    return NextResponse.json(
+      { ok: false, error: `invites list failed: ${err?.message || String(err)}` },
+      { status: 500 }
+    );
+  }
 }

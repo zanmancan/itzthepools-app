@@ -1,3 +1,4 @@
+// src/app/join/[token]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -9,9 +10,10 @@ export default function JoinPage({ params }: { params: { token: string } }) {
   const { token } = params;
   const { addToast } = useToast();
 
+  // auth state
   const [authed, setAuthed] = useState<boolean | null>(null);
 
-  // invite details
+  // invite meta
   const [loadingInvite, setLoadingInvite] = useState(true);
   const [inviteErr, setInviteErr] = useState<string | null>(null);
   const [league, setLeague] = useState<{
@@ -21,12 +23,12 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     season: string;
   } | null>(null);
 
-  // email login state
+  // email login state (magic link)
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
 
-  // team name accept state
+  // team-name accept state
   const [teamName, setTeamName] = useState("");
   const [checking, setChecking] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -34,12 +36,12 @@ export default function JoinPage({ params }: { params: { token: string } }) {
   const [acceptErr, setAcceptErr] = useState<string | null>(null);
   const [checkSeq, setCheckSeq] = useState(0);
 
-  // store token immediately (survives nav + login)
+  // keep the token handy across redirects
   useEffect(() => {
     savePendingInvite(token);
   }, [token]);
 
-  // auth state
+  // who am I?
   useEffect(() => {
     void (async () => {
       const {
@@ -49,7 +51,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     })();
   }, []);
 
-  // load invite meta for league name, ruleset, etc.
+  // pull invite -> league meta (and whether token is already used)
   useEffect(() => {
     void (async () => {
       setLoadingInvite(true);
@@ -82,9 +84,10 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     [teamName]
   );
 
-  // live team-name availability (when authed & we know league)
+  // live team-name availability (when authed & we know the league)
   useEffect(() => {
     if (!authed || !league) return;
+
     if (!cleanName) {
       setAvailable(null);
       setChecking(false);
@@ -118,9 +121,9 @@ export default function JoinPage({ params }: { params: { token: string } }) {
 
   async function sendMagicLink() {
     setSendErr(null);
-    const nextPath = `/join/${token}`; // come back here after clicking email
+    const returnTo = `/join/${token}`; // come back here
     const redirectTo = `${location.origin}/auth/callback?next=${encodeURIComponent(
-      nextPath
+      returnTo
     )}`;
     const { error } = await supabase.auth.signInWithOtp({
       email,
@@ -152,7 +155,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
       if (!res.ok) throw new Error(await res.text());
       addToast("Joined league!", "success");
       clearPendingInvite();
-      // ✅ redirect to plural path
+      // redirect to plural path
       window.location.href = `/leagues/${league.id}`;
     } catch (e: any) {
       setAcceptErr(e?.message ?? "Failed to accept invite");
@@ -162,7 +165,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     }
   }
 
-  // --- UI ---
+  // ---- UI ----
 
   if (loadingInvite || authed === null) {
     return (
@@ -191,7 +194,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     );
   }
 
-  // Not logged in → single email box. Magic link returns right here.
+  // Not logged in → email box for magic link
   if (!authed) {
     return (
       <div className="card max-w-lg">
@@ -227,7 +230,7 @@ export default function JoinPage({ params }: { params: { token: string } }) {
     );
   }
 
-  // Logged in → show accept + team name
+  // Logged in → accept with team name
   return (
     <div className="card max-w-lg">
       <div className="h1 mb-2">Join “{league.name}”</div>

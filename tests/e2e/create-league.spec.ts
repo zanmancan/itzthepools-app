@@ -18,19 +18,15 @@ test.describe("Create League", () => {
     await page.locator('[data-testid="league-name-input"]').fill(name);
     await page.locator('[data-testid="create-league"]').click();
 
-    // Wait for the redirect and DOM to settle
     await expect(page).toHaveURL(/\/leagues\/.+/);
 
-    // Be generous: accept either data-testid or the visible H1 text
     const headerByTestId = page.locator('[data-testid="league-header"]');
-    const headerByRole = page.getByRole("heading", { name: "League" });
+    const headerByRole = page.getByRole("heading", { name });
 
     await expect
       .poll(async () => {
-        const a = await headerByTestId.count();
-        if (a > 0 && (await headerByTestId.first().isVisible())) return true;
-        const b = await headerByRole.count();
-        if (b > 0 && (await headerByRole.first().isVisible())) return true;
+        if ((await headerByTestId.count()) > 0 && (await headerByTestId.first().isVisible())) return true;
+        if ((await headerByRole.count()) > 0 && (await headerByRole.first().isVisible())) return true;
         return false;
       }, { timeout: 10000, intervals: [200, 300, 500] })
       .toBeTruthy();

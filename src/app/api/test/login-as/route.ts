@@ -1,37 +1,28 @@
 // src/app/api/test/login-as/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isProd() {
-  return process.env.NODE_ENV === "production";
-}
-
-/** Test helper: set tp_test_user cookie to simulate auth. Body: { email: string } */
-export async function POST(req: Request) {
-  if (isProd()) return new NextResponse("Not Found", { status: 404 });
-
-  const body = await req.json().catch(() => ({}));
-  const email = String(body?.email || "").trim();
-
-  if (!email) {
-    return NextResponse.json(
-      { ok: false, code: "BAD_REQUEST", message: "email required" },
-      { status: 400 }
-    );
+/**
+ * Set a test user cookie. Example:
+ *   GET /api/test/login-as?user=u_owner
+ */
+export async function GET(req: NextRequest) {
+  const u = req.nextUrl.searchParams.get("user")?.trim() || "";
+  if (!u) {
+    return new Response(JSON.stringify({ ok: false, error: "Missing user" }), {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
   }
 
-  const res = NextResponse.json({ ok: true, email });
-
-  res.cookies.set({
-    name: "tp_test_user",
-    value: email, // plain string
-    httpOnly: true,
-    sameSite: "lax", // must be sent on same-site POST/fetch
-    secure: false,   // dev only
-    path: "/",
-    maxAge: 60 * 60, // 1 hour
+  const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+  // Write several cookie names for robustness
+  const cookieVal = `${u}; Path=/; HttpOnly; SameSite=Lax`;
+  ["e2e_user", "x-e2e-user", "e2e-test-user", "x-test-user"].forEach((name) => {
+    headers.append("set-cookie", `${name}=${cookieVal}`);
   });
 
-  return res;
+  return new Response(JSON.stringify({ ok: true, user: u }), { status: 200, headers });
 }

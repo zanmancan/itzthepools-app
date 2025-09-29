@@ -2,151 +2,151 @@
 
 /**
  * DashboardInvitesPanel
- * - Prefers /api/invites/mine when NEXT_PUBLIC_USE_SUPABASE=1
- * - Falls back to /api/test/invites/list in dev
- * - Shows Revoke button only when canRevoke=true (owner/admin)
- * - UL[data-testid="pending-invites"] with LI[data-testid="invite-row"]
- * - Each LI includes data-token="<invite.token>" for E2E revoke test
- * - Revoke uses /api/invites/revoke (dev proxy) — write path stays in-memory
+ * - Read-only list of latest invites across the in-memory dev store.
+ * - In dev (NEXT_PUBLIC_USE_SUPABASE !== "1"), fetches /api/test/invites/list.
+ * - Renders one row per invite with:
+ *     • data-testid="invite-row"
+ *     • a Revoke button data-testid="revoke-invite"
+ * - The Revoke button calls /api/test/invites/revoke and refreshes the list.
+ * - We always render the button in dev; it’s disabled if already revoked.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const USE_SB = process.env.NEXT_PUBLIC_USE_SUPABASE === "1";
-
-type InviteRow = {
-  token: string;
+type Invite = {
+  id: string;
   email: string;
   leagueId: string;
   leagueName: string;
-  expiresAt: number;
-  consumedAt?: number | null;
-  // Supabase read returns rows without canRevoke; we compute client-side = false
-  canRevoke?: boolean;
+  createdAt: string;
+  revoked?: boolean;
 };
 
-async function fetchList(): Promise<InviteRow[]> {
-  try {
-    if (USE_SB) {
-      // Read-only via Supabase API
-      const res = await fetch("/api/invites/mine", { cache: "no-store", credentials: "same-origin" });
-      if (res.ok) {
-        const j = await res.json().catch(() => ({}));
-        const list: InviteRow[] = Array.isArray(j?.invites) ? j.invites : [];
-        // In Supabase mode we don't know the owner on the client; hide revoke by default.
-        return list.map(r => ({ ...r, canRevoke: false }));
-      }
-      // fall through to dev list if 404/other
-    }
-
-    // Dev/test read: everyone sees rows; canRevoke is computed server-side
-    const res = await fetch("/api/test/invites/list", { cache: "no-store", credentials: "same-origin" });
-    if (!res.ok) return [];
-    const j = await res.json().catch(() => ({}));
-    return Array.isArray(j?.invites) ? (j.invites as InviteRow[]) : [];
-  } catch {
-    return [];
-  }
-}
+const USE_SUPABASE = process.env.NEXT_PUBLIC_USE_SUPABASE === "1";
 
 export default function DashboardInvitesPanel() {
-  const [rows, setRows] = useState<InviteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [revoking, setRevoking] = useState<string | null>(null);
 
-  async function refresh() {
+  const listUrl = useMemo(
+    () => (USE_SUPABASE ? "/api/invites/list" : "/api/test/invites/list"),
+    []
+  );
+  const revokeUrl = useMemo(
+    () => (USE_SUPABASE ? "/api/invites/revoke" : "/api/test/invites/revoke"),
+    []
+  );
+
+  async function load() {
+    setLoading(true);
     setErr(null);
     try {
-      const list = await fetchList();
-      setRows(list);
+      const res = await fetch(listUrl, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json || json.ok === false) throw new Error(json?.error || "failed");
+      const arr: Invite[] = Array.isArray(json.invites) ? json.invites : [];
+      arr.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+      setInvites(arr);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load invites.");
+      console.error("[DashboardInvitesPanel] load error:", e);
+      setErr(e?.message || "Failed to load invites");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      await refresh();
-      if (!alive) return;
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
   async function onRevoke(token: string) {
-    // NOTE: Revoke remains dev-only (in-memory)
     try {
-      const res = await fetch("/api/invites/revoke", {
+      setRevoking(token);
+      const res = await fetch(revokeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
         body: JSON.stringify({ token }),
       });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || `HTTP ${res.status}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.error || `Failed to revoke ${token}`);
       }
-      await refresh();
-    } catch (e: any) {
-      setErr(e?.message || "Failed to revoke invite.");
+      await load();
+    } catch (e) {
+      console.error("[DashboardInvitesPanel] revoke error:", e);
+      // soft-fail; keep UI responsive
+    } finally {
+      setRevoking(null);
     }
   }
 
+  useEffect(() => {
+    load();
+  }, [listUrl]);
+
   return (
     <section
-      className="rounded-xl border border-neutral-800 bg-neutral-900"
+      className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-4 shadow"
       data-testid="invites-panel"
     >
-      <header className="px-4 py-3 border-b border-neutral-800">
-        <h2 className="text-lg font-semibold">Pending Invites</h2>
-      </header>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Recent Invites</h2>
+        <button
+          type="button"
+          onClick={load}
+          className="rounded-lg border border-neutral-700 px-3 py-1 text-xs hover:bg-neutral-800"
+          title="Refresh"
+        >
+          Refresh
+        </button>
+      </div>
 
-      {loading ? (
-        <div className="p-4 text-sm text-neutral-400">Loading…</div>
-      ) : err ? (
-        <div className="p-4 text-sm text-red-400">{err}</div>
-      ) : rows.length === 0 ? (
-        <div className="p-4 text-sm text-neutral-400">No pending invites.</div>
-      ) : (
-        <ul className="divide-y divide-neutral-800" data-testid="pending-invites">
-          {rows.map((r) => (
-            <li
-              key={r.token}
-              className="px-4 py-3 text-sm"
-              data-testid="invite-row"
-              data-token={r.token}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{r.email}</div>
-                  <div className="text-xs text-neutral-400">
-                    {r.leagueName} · <code className="opacity-75">{r.leagueId}</code>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-xs text-neutral-400">
-                    exp {new Date(r.expiresAt).toLocaleDateString()}
-                  </div>
-                  {r.canRevoke && (
+      {loading && <div className="text-sm text-neutral-400">Loading…</div>}
+      {err && (
+        <div className="rounded-md border border-red-800 bg-red-950/40 p-2 text-sm text-red-300">
+          Error: {err}
+        </div>
+      )}
+
+      {!loading && !err && invites.length === 0 && (
+        <div className="text-sm text-neutral-400">No invites yet.</div>
+      )}
+
+      {invites.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-neutral-400">
+              <tr>
+                <th className="py-1 pr-3">Email</th>
+                <th className="py-1 pr-3">League</th>
+                <th className="py-1 pr-3">Created</th>
+                <th className="py-1 pr-3">Status</th>
+                <th className="py-1 pr-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invites.map((inv) => (
+                <tr key={inv.id} data-testid="invite-row" className="border-t border-neutral-800">
+                  <td className="py-2 pr-3">{inv.email}</td>
+                  <td className="py-2 pr-3">{inv.leagueName}</td>
+                  <td className="py-2 pr-3">{new Date(inv.createdAt).toLocaleString()}</td>
+                  <td className="py-2 pr-3">{inv.revoked ? "Revoked" : "Active"}</td>
+                  <td className="py-2 pr-3">
                     <button
                       type="button"
-                      className="text-xs px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                       data-testid="revoke-invite"
-                      onClick={() => onRevoke(r.token!)}
-                      aria-label={`Revoke invite to ${r.email}`}
+                      onClick={() => onRevoke(inv.id)}
+                      disabled={!!inv.revoked || revoking === inv.id}
+                      className="rounded-md border border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50"
+                      title={inv.revoked ? "Already revoked" : "Revoke invite"}
                     >
-                      Revoke
+                      {revoking === inv.id ? "Revoking…" : "Revoke"}
                     </button>
-                  )}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

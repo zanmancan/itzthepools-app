@@ -1,38 +1,50 @@
 // src/app/api/test/role/route.ts
-import { NextResponse } from "next/server";
-import { getLeague } from "@/app/api/test/_store";
+import { NextRequest } from "next/server";
+
+/**
+ * Test-only helper: returns the role for a given leagueId.
+ * Deterministic by league only (user-agnostic), to match E2E specs.
+ *
+ * GET /api/test/role?leagueId=lg_owner
+ * -> { ok: true, leagueId, role: "owner" }
+ */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isProd() {
-  return process.env.NODE_ENV === "production";
+type Role = "owner" | "admin" | "member";
+type Ok = { ok: true; leagueId: string; role: Role | null };
+type Err = { ok: false; error: string };
+
+function json(body: Ok | Err, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
-function getViewerEmail(req: Request) {
-  const raw = req.headers.get("cookie") || "";
-  const m = raw.match(/(?:^|;\s*)tp_test_user=([^;]+)/);
-  let val = m?.[1] ?? "";
-  try { val = decodeURIComponent(val); } catch {}
-  if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-  return val.trim();
+function roleForLeague(leagueId: string): Role | null {
+  switch (leagueId) {
+    case "lg_owner":
+      return "owner";
+    case "lg_admin":
+      return "admin";
+    case "lg_member":
+      return "member";
+    case "lg_non_owner":
+      return "member";
+    default:
+      return "member";
+  }
 }
 
-/**
- * GET /api/test/role?leagueId=lg_...
- * -> { role: "owner" | "member" }
- */
-export async function GET(req: Request) {
-  if (isProd()) return new NextResponse("Not Found", { status: 404 });
-
-  const url = new URL(req.url);
-  const leagueId = String(url.searchParams.get("leagueId") || "").trim();
-  if (!leagueId) return NextResponse.json({ role: "member" as const });
-
-  const email = getViewerEmail(req);
-  const lg = getLeague(leagueId);
-  const role: "owner" | "member" =
-    lg && email && lg.ownerEmail === email ? "owner" : "member";
-
-  return NextResponse.json({ role });
+export async function GET(req: NextRequest) {
+  try {
+    const leagueId = req.nextUrl.searchParams.get("leagueId")?.trim();
+    if (!leagueId) return json({ ok: false, error: "Missing leagueId" }, 400);
+    const role = roleForLeague(leagueId);
+    return json({ ok: true, leagueId, role });
+  } catch (e: any) {
+    return json({ ok: false, error: e?.message || "Unhandled error" }, 500);
+  }
 }

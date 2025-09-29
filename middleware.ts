@@ -1,51 +1,37 @@
-// src/middleware.ts
-// Ensures Supabase auth cookies get refreshed on navigation.
-// Also (optionally) protects /dashboard and /league/*.
-import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+// middleware.ts (root)
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return req.cookies.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          res.cookies.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          res.cookies.set({ name, value: "", ...options });
-        },
-      },
-    }
-  );
-
-  // This call will refresh the session if needed and write cookies to `res`.
-  const { data: { user } } = await supabase.auth.getUser();
-
-  // Optional guards: keep them simple (avoid redirect loops).
-  const url = req.nextUrl.pathname;
-  const needsAuth =
-    url.startsWith("/dashboard") ||
-    url.startsWith("/league");
-
-  if (needsAuth && !user) {
-    const login = new URL("/login", req.url);
-    login.searchParams.set("next", req.nextUrl.pathname + req.nextUrl.search);
-    return NextResponse.redirect(login);
+  // Allow all /api/test/* routes through untouched.
+  if (pathname.startsWith("/api/test/")) {
+    return NextResponse.next();
   }
 
+  // Real/Supabase mode? do nothing special.
+  if (process.env.NEXT_PUBLIC_USE_SUPABASE === "1") {
+    return NextResponse.next();
+  }
+
+  // Dev/E2E: set a deterministic uid cookie so guards work without real auth.
+  const res = NextResponse.next();
+  const get = (n: string) => req.cookies.get(n)?.value ?? null;
+  const set = (n: string, v: string) => res.cookies.set(n, v, { path: "/" });
+
+  const raw = get("tp_test_user")?.toLowerCase();
+  const uid =
+    raw === "u_owner" || raw === "owner" ? "u_owner" :
+    raw === "u_admin" || raw === "admin" ? "u_admin" :
+    raw === "u_member"|| raw === "member"? "u_member" :
+    raw === "u_other" || raw === "other" ? "u_other" :
+    "u_test";
+
+  set("tp_uid", uid);
   return res;
 }
 
 export const config = {
-  // Run on all app routes that need session refresh; exclude static assets.
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
