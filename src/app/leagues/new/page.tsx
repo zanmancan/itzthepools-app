@@ -37,8 +37,22 @@ export default function CreateLeaguePage() {
 
     setSubmitting(true);
     try {
+      // Toggle: Real API if NEXT_PUBLIC_E2E_REAL=1 (client-exposed env); else fake for pure determinism
+      if (process.env.NEXT_PUBLIC_E2E_REAL === "1") {
+        // Real mode: Hit API, get real ID/slug
+        const res = await fetch("/api/leagues", {  // Match our route: POST /api/leagues
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: trimmed }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+        router.push(`/leagues/${json.leagueId || json.slug}`);  // Use id or slug from response
+        return;
+      }
+
+      // Test-like fallback (your original: fake slug)
       if (isTestLike()) {
-        // synthesize a league id and navigate there
         const slugBase = trimmed
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, "_")
@@ -51,15 +65,8 @@ export default function CreateLeaguePage() {
         return;
       }
 
-      // Real mode (future):
-      // const res = await fetch("/api/leagues/create", {
-      //   method: "POST",
-      //   headers: { "content-type": "application/json" },
-      //   body: JSON.stringify({ name: trimmed }),
-      // });
-      // const json = await res.json();
-      // if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      // router.push(`/leagues/${json.leagueId}`);
+      // Future full-real (no env toggle)
+      // ... (your commented block, if needed)
     } catch (e: any) {
       showToast(e?.message || "Unable to create league right now.");
     } finally {
