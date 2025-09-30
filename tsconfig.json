@@ -1,12 +1,10 @@
 {
-  // Self-contained Next 14 + strict config (no "extends")
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "preserve",
-
     "allowJs": true,
     "strict": true,
     "noEmit": true,
@@ -16,18 +14,14 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "incremental": true,
-
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
-
-    // ---- Path aliases: prefer src/* first ----
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*", "./*"],
-      "@/lib/*": ["src/lib/*", "lib/*"],
-      "@/types/*": ["types/*", "src/types/*"]
+      "@/*": ["src/*", "src/app/*"], // Added "src/app/*" to cover utils under app/
+      "@/lib/*": ["src/lib/*"],
+      "@/types/*": ["src/types/*"]
     },
-
     "types": ["node", "react", "react-dom", "next"],
     "plugins": [{ "name": "next" }]
   },

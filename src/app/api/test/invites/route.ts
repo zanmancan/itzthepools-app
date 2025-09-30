@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-// @ts-ignore (if alias/path issues; remove after tsconfig fix)
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/utils/supabase/server'; // Should resolve after tsconfig update
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
@@ -36,14 +35,13 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const token = searchParams.get('token');
-  const action = searchParams.get('action') || 'by-token';  // Default to lookup
+  const action = searchParams.get('action') || 'by-token';
 
   if (!token) {
     return NextResponse.json({ ok: false, error: 'Missing token' }, { status: 400 });
   }
 
   if (process.env.NEXT_PUBLIC_USE_SUPABASE !== '1') {
-    // In-memory stub
     const mockInvite = { league_id: 'stub-league', status: action === 'accept' ? 'accepted' : 'pending', token };
     if (action === 'accept' && mockInvite.status === 'accepted') {
       return NextResponse.json({ ok: false, error: 'Invite already accepted' });
@@ -53,8 +51,6 @@ export async function GET(req: NextRequest) {
 
   try {
     const supabase = createClient();
-
-    // Lookup invite
     const { data: invite, error } = await supabase
       .from('invites')
       .select('*')
@@ -65,12 +61,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Invite not found' }, { status: 404 });
     }
 
-    // Action: by-token (just return)
     if (action === 'by-token') {
       return NextResponse.json({ ok: true, invite });
     }
 
-    // Action: accept (mutate if pending)
     if (action === 'accept') {
       if (invite.status !== 'pending') {
         return NextResponse.json({ ok: false, error: 'Invite already accepted' });
@@ -83,7 +77,6 @@ export async function GET(req: NextRequest) {
 
       if (updateError) throw updateError;
 
-      // Refetch
       const { data: updatedInvite } = await supabase
         .from('invites')
         .select('*')
