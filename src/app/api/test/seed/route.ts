@@ -1,6 +1,5 @@
 // src/app/api/test/seed/route.ts — Deterministic Fixture for Invite Flow (League + Token)
 import { NextRequest, NextResponse } from "next/server";
-import slugify from "slugify";  // For token if gen
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,22 +17,22 @@ const testInvites = (globalThis as any).testInvites as Record<string, { league_i
 
 /**
  * GET /api/test/seed
- * Params: leagueId (string), email (string)
+ * Params: leagueId (string), email (string), used? (true for sub-test 2)
  * Seeds invite token for league (deterministic for E2E)
- * If token exists, update status; else gen new
- * Returns {ok: true, token: string}
+ * Returns {ok: true, invite: {token, league_id, email, status}}
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const leagueId = searchParams.get('leagueId');
   const email = searchParams.get('email');
+  const used = searchParams.get('used') === 'true';
 
   if (!leagueId || !email) {
     return NextResponse.json({ ok: false, error: 'leagueId and email required' }, { status: 400 });
   }
 
   // Deterministic token for flow (tk_elfmc6uvg1 for used case)
-  const token = 'tk_elfmc6uvg1';  // Fixed for spec; gen random if needed
+  const token = 'tk_elfmc6uvg1';  // Fixed for spec
 
   // Init if undefined
   if (testInvites[token] === undefined) {
@@ -45,10 +44,12 @@ export async function GET(req: NextRequest) {
     };
   }
 
-  // Mark used for sub-test 2 (spec calls with used flag? Or separate)
-  if (searchParams.get('used') === 'true') {
+  // Mark used for sub-test 2
+  if (used) {
     testInvites[token].status = 'used';
   }
 
-  return NextResponse.json({ ok: true, token });
+  const invite = testInvites[token];
+
+  return NextResponse.json({ ok: true, invite });
 }
