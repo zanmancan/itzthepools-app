@@ -1,85 +1,111 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect } from '@playwright/test';
+import type { Page, APIRequest, APIRequestContext } from '@playwright/test';
 
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3001";
+interface ApiResponse<T> {
+  ok: boolean;
+  invite?: T;
+  league?: T;
+  error?: string;
+}
 
-/** JSON helpers that surface raw bodies in failures */
-async function apiGET<T>(page: Page, path: string): Promise<T> {
-  const res = await page.request.get(`${BASE_URL}${path}`, { failOnStatusCode: false });
+interface Invite {
+  token: string;
+  status: string;
+  league_id: string;
+}
+
+interface League {
+  id: string;
+  name: string;
+}
+
+type InviteResponse = ApiResponse<Invite>;
+type LeagueResponse = ApiResponse<League>;
+
+async function apiGET<T>(apiRequest: APIRequestContext, path: string): Promise<T> {
+  const res = await apiRequest.get(path);
   const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`Expected JSON from GET ${path}\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
-  }
-  if (!res.ok() || json?.ok === false) {
+  const json = await res.json();
+  if (!res.ok() || (json as any)?.ok === false) {
     throw new Error(`GET ${path} failed\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
   }
   return json as T;
 }
 
-async function apiPOST<T>(page: Page, path: string, data?: Record<string, any>): Promise<T> {
-  const res = await page.request.post(`${BASE_URL}${path}`, { data, failOnStatusCode: false });
+async function apiPOST<T>(apiRequest: APIRequestContext, path: string, body: object): Promise<T> {
+  const res = await apiRequest.post(path, { data: body });
   const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`Expected JSON from POST ${path}\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
-  }
-  if (!res.ok() || json?.ok === false) {
+  const json = await res.json();
+  if (!res.ok() || (json as any)?.ok === false) {
     throw new Error(`POST ${path} failed\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
   }
   return json as T;
 }
 
-test.beforeEach(async ({ page }) => {
-  // Reset the in-memory test store every run
-  await apiPOST(page, "/api/test/reset");
-});
+test.describe('Invite Flow', () => {
+  test('happy path: accept unique team, see league header', async ({ page, request }) => {
+    const apiRequest = await request.newContext();
 
-test.describe("Invite Flow", () => {
-  test("happy path: accept unique team, see league header", async ({ page }) => {
-    const leagueId = "lg_flow";
-    const email = "user@example.com";
+    // Create test league
+    const leagueResponse: LeagueResponse = await apiPOST(apiRequest, '/api/test/leagues', {
+      name: 'Test Invite League',
+      sport: 'nfl',
+      season: '2025',
+    });
+    const leagueId = leagueResponse.league!.id;
 
-    // 1) Seed one invite
-    const seed = await apiGET<{ ok: true; invite: { token: string } }>(
-      page,
-      `/api/test/seed?leagueId=${leagueId}&email=${encodeURIComponent(email)}`
-    );
+    // Create invite
+    const inviteResponse: InviteResponse = await apiPOST(apiRequest, '/api/test/invites', {
+      leagueId,
+      email: 'acceptor@example.com',
+    });
+    const token = inviteResponse.invite!.token;
 
-    // 2) Sanity: token resolves via query-param endpoint
-    await apiGET(page, `/api/test/invites/by-token?token=${seed.invite.token}`);
+    // Verify by-token lookup
+    const inviteByToken: InviteResponse = await apiGET(apiRequest, `/api/test/invites/by-token?token=${token}`);
+    expect(inviteByToken.invite!.league_id).toBe(leagueId);
+    expect(inviteByToken.ok).toBe(true);
 
-    // 3) Accept via API (deterministic + fast)
-    await apiGET(page, `/api/test/invites/accept?token=${seed.invite.token}`);
+    // Navigate to accept page and assert
+    await page.goto(`/invites/${token}`);
+    await expect(page.getByRole('heading', { name: /Join.*Test Invite League/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Accept Invite/i })).toBeVisible();
 
-    // 4) UI: header should CONTAIN the league id (page adds "League " label)
-    await page.goto(`${BASE_URL}/leagues/${leagueId}`);
-    const header = page.getByTestId("league-header");
-    await expect(header).toContainText(leagueId, { timeout: 10_000 });
-    // Alternative stricter form if you prefer suffix match:
-    // await expect(header).toHaveText(new RegExp(`${leagueId}$`));
+    // Simulate accept (click button, assert redirect to league)
+    await page.getByRole('button', { name: /Accept Invite/i }).click();
+    await expect(page).toHaveURL(/\/leagues\/[^/]+/);
+    await expect(page.getByRole('heading', { name: /Test Invite League/i })).toBeVisible();
+
+    await apiRequest.dispose();
   });
 
-  test("used token is reported as used by the API", async ({ page }) => {
-    const leagueId = "lg_flow_used";
-    const email = "first@x.com";
+  test('used token is reported as used by the API', async ({ request }) => {
+    const apiRequest = await request.newContext();
 
-    const { invite } = await apiGET<any>(
-      page,
-      `/api/test/seed?leagueId=${leagueId}&email=${encodeURIComponent(email)}`
-    );
+    // Create test league
+    const leagueResponse: LeagueResponse = await apiPOST(apiRequest, '/api/test/leagues', {
+      name: 'Used Token League',
+      sport: 'nfl',
+      season: '2025',
+    });
+    const leagueId = leagueResponse.league!.id;
 
-    // First accept succeeds
-    await apiGET(page, `/api/test/invites/accept?token=${invite.token}`);
+    // Create and "accept" invite (simulate usage)
+    const inviteResponse: InviteResponse = await apiPOST(apiRequest, '/api/test/invites', {
+      leagueId,
+      email: 'used@example.com',
+    });
+    const token = inviteResponse.invite!.token;
 
-    // Fetch again: invite exists and is marked used
-    const again = await apiGET<{ ok: true; invite: { used: boolean } }>(
-      page,
-      `/api/test/invites/by-token?token=${invite.token}`
-    );
-    expect(again.invite.used).toBe(true);
+    // Mark as accepted via test helper
+    const acceptResponse: InviteResponse = await apiPOST(apiRequest, `/api/test/invites/accept?token=${token}`, {});
+    expect(acceptResponse.ok).toBe(true);
+
+    // Attempt accept again: expect used error
+    const acceptAgain: ApiResponse<unknown> = await apiGET(apiRequest, `/api/test/invites/accept?token=${token}`);
+    expect(acceptAgain.ok).toBe(false);
+    expect(acceptAgain.error).toContain('already accepted');
+
+    await apiRequest.dispose();
   });
 });
