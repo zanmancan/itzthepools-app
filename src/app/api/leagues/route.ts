@@ -49,10 +49,19 @@ interface QueryResult {
   error: any;
 }
 
-// In-memory (global for shared state)
-let inMemoryLeagues: League[] = [];
-let inMemoryMembers: Membership[] = [];
-let nextId = 1;
+// Global in-memory (shared across routes)
+declare global {
+  var inMemoryLeagues: League[];
+  var inMemoryMembers: Membership[];
+  var nextId: number;
+}
+if (typeof window === 'undefined') {
+  (globalThis as any).inMemoryLeagues = (globalThis as any).inMemoryLeagues || [];
+  (globalThis as any).inMemoryMembers = (globalThis as any).inMemoryMembers || [];
+  (globalThis as any).nextId = (globalThis as any).nextId || 1;
+}
+const inMemoryLeagues = (globalThis as any).inMemoryLeagues as League[];
+const inMemoryMembers = (globalThis as any).inMemoryMembers as Membership[];
 
 /**
  * POST /api/leagues
@@ -78,10 +87,10 @@ export async function POST(req: NextRequest) {
     body = await req.json() as BodyType;
   } catch {}
 
-  const name = (body.name ?? "").toString().trim();
+  const name = (body.name ?? '').toString().trim();
   if (!name) return jsonWithRes(response, { error: "name is required" }, 400);
 
-  const season = (body.season ?? "").toString().trim() || new Date().getFullYear().toString();
+  const season = (body.season ?? '').toString().trim() || new Date().getFullYear().toString();
   const ruleset = body.ruleset ? body.ruleset.toString() : null;
   const is_public = Boolean(body.is_public);
 
@@ -125,8 +134,8 @@ export async function POST(req: NextRequest) {
     const slug = `lg-${slugify(name, { lower: true, strict: true })}`;
     return jsonWithRes(response, { ok: true, leagueId: slug });
   } else {
-    // In-memory
-    const id = (nextId++).toString();
+    // In-memory (global shared)
+    const id = ((globalThis as any).nextId++).toString();
     const slug = `lg-${slugify(name, { lower: true, strict: true })}`;
     const createdAt = new Date().toISOString();
 
@@ -193,7 +202,7 @@ export async function GET(req: NextRequest) {
           season: l.season,
           ruleset: l.ruleset ?? null,
           is_public: !!l.is_public,
-          created_at: l.created_at || '',  // From select if available
+          created_at: l.created_at || '',
           created_by: l.created_by || '',
         } as League;
       })
@@ -203,7 +212,7 @@ export async function GET(req: NextRequest) {
 
     return jsonWithRes(response, { ok: true, leagues });
   } else {
-    // In-memory
+    // In-memory (global shared)
     const userMembers = inMemoryMembers.filter((m) => m.user_id === user.id);
     const leagues: League[] = userMembers
       .map((m) => {
