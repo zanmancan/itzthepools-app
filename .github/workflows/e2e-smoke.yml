@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: {} # <-- enables the "Run workflow" button
 
 jobs:
   smoke:
@@ -14,8 +15,8 @@ jobs:
       NODE_ENV: production
       PORT: 3001
       BASE_URL: http://localhost:3001
-      # Default the badge OFF; we'll run a second pass with it ON for that one spec
       NEXT_PUBLIC_E2E_DEV_SAFETY: '0'
+      NEXT_TELEMETRY_DISABLED: '1'
 
     steps:
       - name: Checkout
@@ -25,7 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
       - name: Install deps
         run: npm ci
@@ -40,8 +41,18 @@ jobs:
         run: |
           nohup sh -c "PORT=${PORT} NEXT_PUBLIC_E2E_DEV_SAFETY=${NEXT_PUBLIC_E2E_DEV_SAFETY} npx next start" >/tmp/next.log 2>&1 &
           npx -y wait-on http-get://localhost:${PORT}
+          # quick health curl (non-fatal if missing)
+          curl -sf http://localhost:${PORT}/api/test/reset || true
+          curl -sf http://localhost:${PORT}/api/test/debug || true
+          curl -sf http://localhost:${PORT}/api/test/dev-safety || true
 
-      - name: Run smoke tests (1–7)
+      - name: Tail Next log (badge OFF)
+        if: always()
+        run: |
+          echo "----- /tmp/next.log (last 200 lines) -----"
+          tail -n 200 /tmp/next.log || true
+
+      - name: Run smoke tests (1–7, badge OFF)
         run: |
           npx playwright test tests/e2e/auth-guards.spec.ts --workers=1
           npx playwright test tests/e2e/create-league.spec.ts --workers=1
@@ -50,16 +61,22 @@ jobs:
           npx playwright test tests/e2e/bulk-invites.spec.ts --workers=1
           npx playwright test tests/e2e/kebab-menu.spec.ts --workers=1
           npx playwright test tests/e2e/dev-safety-badge.spec.ts --workers=1
-        # Your dev-safety spec auto-skips the "visible" case when the app flag is off.
 
-      - name: Stop server
+      - name: Stop server (badge OFF)
         if: always()
         run: pkill -f "next start" || true
 
       - name: Start server (badge ON)
         run: |
-          nohup sh -c "PORT=${PORT} NEXT_PUBLIC_E2E_DEV_SAFETY=1 npx next start" >/tmp/next.log 2>&1 &
+          nohup sh -c "PORT=${PORT} NEXT_PUBLIC_E2E_DEV_SAFETY=1 npx next start" >/tmp/next_on.log 2>&1 &
           npx -y wait-on http-get://localhost:${PORT}
+          curl -sf http://localhost:${PORT}/api/test/dev-safety || true
+
+      - name: Tail Next log (badge ON)
+        if: always()
+        run: |
+          echo "----- /tmp/next_on.log (last 200 lines) -----"
+          tail -n 200 /tmp/next_on.log || true
 
       - name: Run only dev-safety (ON) test
         run: npx playwright test tests/e2e/dev-safety-badge.spec.ts --workers=1
