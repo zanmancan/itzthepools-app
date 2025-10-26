@@ -1,75 +1,31 @@
-// Seed helper for E2E tests.
-// GET /api/test/seed?leagueId=lg_flow&email=user@example.com[&used=1]
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getStore, type Invite, type League } from "@/app/api/test/_store";
+import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
+import { store } from '@/lib/store'; // Update import as per your structure
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const leagueId = body.leagueId as string;
+  const email = body.email as string;
 
-function nowIso() { return new Date().toISOString(); }
-function rand(n = 8) {
-  const al = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < n; i++) s += al[(Math.random() * al.length) | 0];
-  return s;
-}
-function token(prefix: string) { return `${prefix}_${rand(10)}`; }
-
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const leagueId = (url.searchParams.get("leagueId") || "lg_flow").trim();
-    const email = (url.searchParams.get("email") || "user@example.com").trim();
-    const markUsed = url.searchParams.get("used") === "1";
-    if (!leagueId) return NextResponse.json({ ok:false, error:"leagueId is required" }, { status:400 });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ ok:false, error:"valid email required" }, { status:400 });
-
-    const store = getStore();
-
-    // Ensure league exists
-    if (!store.leagues[leagueId]) {
-      const ownerId = "u_owner";
-      const lg: League = {
-        id: leagueId,
-        name: `League ${leagueId}`,
-        season: undefined,
-        ruleset: undefined,
-        ownerId,
-        ownerEmail: null,
-        members: { [ownerId]: "owner" },
-        created_at: nowIso(),
-      };
-      store.leagues[leagueId] = lg;
-    }
-
-    // Make invite
-    const inv: Invite = {
-      id: `inv_${rand(8)}`,
-      token: token("tk"),
-      email,
-      is_public: false,
-      expires_at: null,
-      used_at: markUsed ? nowIso() : null,
-      created_at: nowIso(),
-      league_id: leagueId,
-    };
-
-    // Index everywhere
-    store.invitesByToken[inv.token] = inv;
-    (store.invitesByLeague[leagueId] ??= []).push(inv);
-
-    const res = NextResponse.json({ ok: true, leagueId, token: inv.token, invite: inv }, { status: 200 });
-    res.cookies.set("tp_last_invite", JSON.stringify({ leagueId, token: inv.token, email }), {
-      path: "/", httpOnly: false, sameSite: "lax", maxAge: 600,
-    });
-
-    const ck = cookies();
-    if (!ck.get("tp_test_user")) {
-      res.cookies.set("tp_test_user", "u_test", { path:"/", httpOnly:false, sameSite:"lax", maxAge:3600 });
-    }
-    return res;
-  } catch (err: any) {
-    return NextResponse.json({ ok:false, error:`seed failed: ${err?.message || String(err)}` }, { status:500 });
+  if (!store.leagues[leagueId]) {
+    return NextResponse.json({ ok: false, error: 'League not found' }, { status: 404 });
   }
+
+  const lg = store.leagues[leagueId];
+
+  const inv = {
+    id: randomUUID(),
+    league_id: leagueId,
+    email,
+    token: randomUUID(),
+    status: 'pending',
+    invited_by: 'test-owner',
+    is_public: false, // Added to match type
+  };
+
+  store.invites.push(inv);
+  store.invitesByToken[inv.token] = inv;
+  (store.invitesByLeague[leagueId] ??= []).push(inv);
+
+  return NextResponse.json({ ok: true, invite: inv });
 }

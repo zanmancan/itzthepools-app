@@ -61,19 +61,19 @@ test.describe('Invite Flow', () => {
     const token = inviteResponse.invite!.token;
 
     // Verify by-token lookup
-    const inviteByToken: InviteResponse = await apiGET(request, `/api/test/invites/by-token?token=${token}`);
+    const inviteByToken: InviteResponse = await apiGET(request, `/api/test/invites?action=by-token&token=${token}`);
     expect(inviteByToken.invite!.league_id).toBe(leagueId);
     expect(inviteByToken.ok).toBe(true);
 
     // Navigate to accept page and assert
     await page.goto(`/invites/${token}`);
-    await expect(page.getByRole('heading', { name: /Join.*Test Invite League/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Accept Invite/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Join Test Invite League' })).toBeVisible(); // Exact match
+    await expect(page.getByRole('button', { name: 'Accept Invite' })).toBeVisible();
 
     // Simulate accept (click button, assert redirect to league)
-    await page.getByRole('button', { name: /Accept Invite/i }).click();
+    await page.getByRole('button', { name: 'Accept Invite' }).click();
     await expect(page).toHaveURL(/\/leagues\/[^/]+/);
-    await expect(page.getByRole('heading', { name: /Test Invite League/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test Invite League' })).toBeVisible();
   });
 
   test('used token is reported as used by the API', async ({ request }) => {
@@ -93,12 +93,15 @@ test.describe('Invite Flow', () => {
     const token = inviteResponse.invite!.token;
 
     // Mark as accepted via test helper
-    const acceptResponse: InviteResponse = await apiPOST(request, `/api/test/invites/accept?token=${token}`, {});
+    const acceptResponse: InviteResponse = await apiGET(request, `/api/test/invites?action=accept&token=${token}`);
     expect(acceptResponse.ok).toBe(true);
 
     // Attempt accept again: expect used error
-    const acceptAgain: ApiResponse<unknown> = await apiGET(request, `/api/test/invites/accept?token=${token}`);
-    expect(acceptAgain.ok).toBe(false);
-    expect(acceptAgain.error).toContain('already accepted');
+    const acceptAgain: ApiResponse<unknown> = await apiGET(request, `/api/test/invites?action=accept&token=${token}`);
+    if (!acceptAgain.ok) {
+      expect(acceptAgain.error).toContain('already accepted'); // Handle 200 with ok: false
+    } else {
+      throw new Error('Expected invite to be already accepted');
+    }
   });
 });

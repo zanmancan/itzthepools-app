@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server'; // Should resolve after tsconfig update
+import { createClient } from '@/utils/supabase/server';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
   const token = searchParams.get('token');
   const action = searchParams.get('action') || 'by-token';
 
+  console.log(`GET /invites: token=${token}, action=${action}`); // Debug log
   if (!token) {
     return NextResponse.json({ ok: false, error: 'Missing token' }, { status: 400 });
   }
