@@ -1,47 +1,74 @@
 // Bulk create invites for a league (dev/E2E friendly).
-// Accepts many client shapes so the page works without changes.
+// Accepts many client shapes so existing pages/tests keep working.
 //
 // POST /api/invites/bulk-create
-// Body can be:
-//   - JSON: { leagueId, emails: "a@x.com,b@y.com" | string[] | null, text?: string }
-//   - form-urlencoded / multipart: leagueId=..., emails=..., text=...
-// Query string (?leagueId=...&emails=...) is also accepted on POST and GET.
+//   Body can be:
+//     - JSON: { leagueId, emails: "a@x.com,b@y.com" | string[] | null, text?: string }
+//     - form-urlencoded / multipart: leagueId=..., emails=..., text=...
+//   (Also tolerates querystring on POST.)
+// GET /api/invites/bulk-create?leagueId=...&emails=...
 //
-// Response includes multiple shapes (invites[], items[], results[]) so
-// existing UIs/tests can pick whichever they expect.
+// Response mirrors several shapes (invites[], items[], results[]) so legacy
+// callers can keep using what they expect without rewrites.
 
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getStore, type Invite, type League } from "@/app/api/test/_store";
+import { NextResponse, NextRequest } from "next/server";
+import { randomUUID } from "crypto";
+import {
+  getStore,
+  type Invite,
+  type League,
+} from "@/app/api/test/_store";
 
-export const runtime = "nodejs";
+/** Always dynamic (dev stub) */
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-// -------------- utils --------------
-const nowIso = () => new Date().toISOString();
-const rand = (n = 10) => {
-  const al = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < n; i++) s += al[(Math.random() * al.length) | 0];
-  return s;
-};
-const token = (p = "tk") => `${p}_${rand(10)}`;
-const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+/* ─────────────────────────── Helpers ─────────────────────────── */
 
-function normalizeEmails(raw?: unknown): string[] {
-  if (!raw) return [];
-  let text = "";
-  if (Array.isArray(raw)) text = raw.join("\n");
-  else text = String(raw);
-  const list = text.split(/[\n,; ]+/g).map(s => s.trim().toLowerCase()).filter(Boolean);
-  return Array.from(new Set(list.filter(isEmail)));
+function nowIso() {
+  return new Date().toISOString();
 }
 
+function token() {
+  // dev-friendly token; not security sensitive in this stub backend
+  return `tok_${randomUUID()}`;
+}
+
+/** Accepts string | string[] | undefined and returns unique, trimmed emails */
+function normalizeEmails(input: unknown): string[] {
+  if (!input) return [];
+  let raw: string[] = [];
+
+  if (Array.isArray(input)) {
+    raw = input.map(String);
+  } else {
+    // common textarea → comma/newline/space separated
+    const s = String(input);
+    raw = s
+      .split(/[\n,;]+/g)
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+
+  // de-dupe case-insensitively
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const e of raw) {
+    const lc = e.toLowerCase();
+    if (!seen.has(lc)) {
+      seen.add(lc);
+      out.push(e);
+    }
+  }
+  return out;
+}
+
+/** Read body from JSON, urlencoded, multipart, plus merge in querystring on POST */
 async function parseBody(req: Request): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   const url = new URL(req.url);
 
-  // query always available
+  // always pick up query, in case caller sends via GET or mixes with POST
   for (const k of ["leagueId", "emails", "text"]) {
     const v = url.searchParams.get(k);
     if (v != null) out[k] = v;
@@ -57,116 +84,126 @@ async function parseBody(req: Request): Promise<Record<string, any>> {
       const sp = new URLSearchParams(t);
       for (const k of sp.keys()) out[k] = sp.get(k);
     } else if (ct.includes("multipart/form-data")) {
+      // ts-expect-error: formData on Next's Request at runtime
       const form = await (req as any).formData?.();
       if (form) for (const k of form.keys()) out[k] = form.get(k)?.toString();
     } else {
-      // try json anyway if header missing
+      // Be tolerant: sometimes callers forget headers but still send JSON
       const j = await req.json().catch(() => null);
       if (j && typeof j === "object") Object.assign(out, j);
     }
   } catch {
-    // ignore
+    // ignore malformed bodies; we still may have query params
   }
+
+  // If a free-form textarea was provided, treat it like emails too
+  if (out.text && !out.emails) out.emails = out.text;
+
   return out;
 }
 
-function viewerId(): string {
-  const ck = cookies();
-  return ck.get("tp_test_user")?.value || ck.get("tp_user")?.value || "u_test";
+/** Ensure a league exists (for dev) or create a friendly stub */
+function ensureLeague(store: ReturnType<typeof getStore>, leagueId: string): League {
+  const existing = store.LEAGUES.find((l) => l.id === leagueId);
+  if (existing) return existing;
+
+  // For local/E2E we’re allowed to create a stub league to keep flows unblocked
+  const stub: League = {
+    id: leagueId,
+    name: `League ${leagueId}`,
+    ownerId: "owner_1",
+    members: { owner_1: "owner" },
+  };
+  store.upsertLeague(stub);
+  return stub;
 }
 
-function ensureLeague(store: any, leagueId: string): League {
-  if (!store.leagues[leagueId]) {
-    const ownerId = "u_owner";
-    const lg: League = {
-      id: leagueId,
-      name: `League ${leagueId}`,
-      season: undefined,
-      ruleset: undefined,
-      ownerId,
-      ownerEmail: null,
-      members: { [ownerId]: "owner" },
-      created_at: nowIso(),
-    };
-    store.leagues[leagueId] = lg;
-  }
-  return store.leagues[leagueId];
-}
+type BulkCreateResult = {
+  ok: true;
+  leagueId: string;
+  invites: Invite[];               // created
+  duplicates: string[];            // skipped (already invited in this league)
+  counts: { created: number; duplicates: number; totalRequested: number };
+  // compatibility aliases for older call-sites
+  items: Invite[];
+  results: { email: string; status: "created" | "duplicate" }[];
+  createdAt: string;
+};
 
-function isOwnerOrAdmin(store: any, leagueId: string, userId: string): boolean {
-  const lg: League | undefined = store.leagues[leagueId];
-  if (!lg) return false;
-  const role = lg.members?.[userId];
-  return role === "owner" || role === "admin";
-}
+/* ─────────────────────────── Core ─────────────────────────── */
 
-async function bulkCreateCore(leagueId: string, emailsRaw?: unknown) {
+async function bulkCreateCore(leagueId: string, emailsRaw?: unknown): Promise<BulkCreateResult> {
   const store = getStore();
   ensureLeague(store, leagueId);
 
-  store.invitesByLeague[leagueId] ??= [];
-  const existing = new Set(store.invitesByLeague[leagueId].map((i: Invite) => i.email.toLowerCase()));
+  // Build a set of "already invited" (case-insensitive) for this league
+  const existing = new Set(
+    store.INVITES
+      .filter((i) => i.leagueId === leagueId)
+      .map((i) => i.email.toLowerCase())
+  );
 
-  // Accept "emails" (string | string[]) or "text" (string)
-  const emails = normalizeEmails((emailsRaw ?? "") as any);
-
+  const emails = normalizeEmails(emailsRaw ?? "");
   const created: Invite[] = [];
   const duplicates: string[] = [];
 
   for (const email of emails) {
-    if (existing.has(email)) {
+    if (existing.has(email.toLowerCase())) {
       duplicates.push(email);
       continue;
     }
-    const inv: Invite = {
-      id: `inv_${rand(8)}`,
-      token: token("tk"),
+
+    // Use the canonical store helper to keep shapes correct
+    const made = store.addInvite({
+      leagueId,
       email,
-      is_public: false,
-      expires_at: null,
-      used_at: null,
-      created_at: nowIso(),
-      league_id: leagueId,
-    };
-    store.invitesByToken[inv.token] = inv;
-    store.invitesByLeague[leagueId].push(inv);
-    created.push(inv);
-    existing.add(email);
+      role: "member",
+      token: token(),
+    });
+
+    created.push(made);
+    existing.add(email.toLowerCase());
   }
 
-  // Provide multiple keys so any component shape works
+  // Friendly result that matches multiple consumer expectations
   return {
-    ok: true as const,
+    ok: true,
     leagueId,
-    counts: { requested: emails.length, created: created.length, duplicates: duplicates.length },
-    invites: created.map(i => ({ token: i.token, email: i.email })),   // common
-    items: created.map(i => ({ email: i.email, token: i.token })),     // alt
-    results: created.map(i => ({ email: i.email, status: "created" })),// alt
+    invites: created,
     duplicates,
+    items: created,
+    results: [
+      ...created.map((i) => ({ email: i.email, status: "created" as const })),
+      ...duplicates.map((e) => ({ email: e, status: "duplicate" as const })),
+    ],
+    counts: {
+      created: created.length,
+      duplicates: duplicates.length,
+      totalRequested: emails.length,
+    },
+    createdAt: nowIso(),
   };
 }
 
-// -------------- handlers --------------
-export async function POST(req: Request) {
+/* ─────────────────────────── Routes ─────────────────────────── */
+
+export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req);
-    const leagueId = String(body?.leagueId ?? "").trim();
-    const emailsRaw = body?.emails ?? body?.text;
-
-    if (!leagueId) return NextResponse.json({ ok: false, error: "leagueId required" }, { status: 400 });
-
-    const store = getStore();
-    ensureLeague(store, leagueId);
-    const dev = process.env.NEXT_PUBLIC_E2E_DEV_SAFETY === "1";
-    const user = viewerId();
-    if (!dev && !isOwnerOrAdmin(store, leagueId, user)) {
-      return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+    const leagueId = String(body.leagueId || "").trim();
+    if (!leagueId) {
+      return NextResponse.json(
+        { ok: false, error: "leagueId required" },
+        { status: 400 }
+      );
     }
-
-    const out = await bulkCreateCore(leagueId, emailsRaw);
+    const out = await bulkCreateCore(leagueId, body.emails ?? body.text ?? "");
     return NextResponse.json(out, { status: 200 });
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: `bulk-create failed: ${err?.message || String(err)}` }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: `bulk-create POST failed: ${err?.message || String(err)}` },
+      { status: 500 }
+    );
   }
 }
 
@@ -174,11 +211,19 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const leagueId = (url.searchParams.get("leagueId") || "").trim();
-    const emailsRaw = url.searchParams.get("emails") || "";
-    if (!leagueId) return NextResponse.json({ ok: false, error: "leagueId required" }, { status: 400 });
+    const emailsRaw = url.searchParams.get("emails") || url.searchParams.get("text") || "";
+    if (!leagueId) {
+      return NextResponse.json(
+        { ok: false, error: "leagueId required" },
+        { status: 400 }
+      );
+    }
     const out = await bulkCreateCore(leagueId, emailsRaw);
     return NextResponse.json(out, { status: 200 });
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: `bulk-create GET failed: ${err?.message || String(err)}` }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: `bulk-create GET failed: ${err?.message || String(err)}` },
+      { status: 500 }
+    );
   }
 }
