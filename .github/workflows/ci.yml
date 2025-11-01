@@ -2,21 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.jpeg'
-      - '**/*.gif'
+    branches: [main, master, '**/*']
   pull_request:
-    branches: [main]
 
 jobs:
-  build-test:
-    name: TypeScript check
+  e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    env:
+      CI: '1'
+      NODE_ENV: production
+      NEXT_PUBLIC_E2E_DEV_SAFETY: '1'
+      E2E_BASE_URL: http://localhost:3001
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,11 +20,44 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: 20
+          cache: npm
 
       - name: Install deps
         run: npm ci
 
-      - name: TypeScript check (no emit)
-        run: npx -y typescript@5.6.3 tsc -p . --noEmit
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Typecheck
+        run: npx tsc -p . --noEmit
+
+      - name: Build Next.js
+        run: npm run build
+
+      - name: Start server
+        run: |
+          nohup npm run start -- -p 3001 > .next/server.log 2>&1 &
+          for i in {1..60}; do
+            if curl -sf http://localhost:3001 > /dev/null; then echo "Server up"; break; fi
+            sleep 1
+          done
+
+      - name: Run E2E (workers=1 for determinism)
+        run: npx playwright test --workers=1
+
+      - name: Upload Playwright Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7
+
+      - name: Upload Traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces
+          path: test-results
+          retention-days: 7
