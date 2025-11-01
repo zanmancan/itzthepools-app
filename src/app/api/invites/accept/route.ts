@@ -1,57 +1,56 @@
-import { NextResponse } from "next/server";
-import {
-  acceptInviteByToken,
-  findInviteById,
-  revokeInvite,
-  getLeague,
-  LEAGUES,
-  INVITES,
-} from "@/app/api/test/_store";
+import { NextRequest, NextResponse } from "next/server";
+import { getStore } from "@/app/api/test/_store";
+
+export const dynamic = "force-dynamic" as const;
+export const runtime = "nodejs" as const;
 
 /**
- * POST /api/invites/accept
- * Body: { token?: string; id?: string; joinKey?: string }
- * - Accepts by token (preferred) or by id (fallback).
- * - Updates in-memory store only (local/dev).
+ * Accept an invite by token and add the user to the league's members.
+ * Body JSON: { token: string, userId?: string }
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as {
-      token?: string;
-      id?: string;
-      joinKey?: string;
-    };
+    const body = await req.json().catch(() => ({}));
+    const token = String(body.token ?? "").trim();
+    const userId = String(body.userId ?? "u_test").trim();
 
-    if (!body?.token && !body?.id) {
-      return NextResponse.json(
-        { ok: false, error: "Provide 'token' or 'id' to accept invite" },
-        { status: 400 }
-      );
+    if (!token) {
+      return NextResponse.json({ ok: false, error: "token required" }, { status: 400 });
     }
 
-    if (body.token) {
-      const { invite, league } = acceptInviteByToken(body.token, body.joinKey);
-      return NextResponse.json({ ok: true, invite, league }, { status: 200 });
+    const store = getStore();
+    const invite = store.findInviteByToken(token);
+    if (!invite) {
+      return NextResponse.json({ ok: false, error: "invite not found" }, { status: 404 });
     }
 
-    // Fallback path: accept by id (treated same as token accept)
-    const inv = findInviteById(body.id!);
-    if (!inv) {
-      return NextResponse.json(
-        { ok: false, error: "Invite not found for id" },
-        { status: 404 }
-      );
+    const league = store.getLeague(invite.leagueId);
+    if (!league) {
+      return NextResponse.json({ ok: false, error: "league missing" }, { status: 404 });
     }
-    const { invite, league } = acceptInviteByToken(inv.token, body.joinKey);
-    return NextResponse.json({ ok: true, invite, league }, { status: 200 });
+
+    // add member
+    league.members = league.members || {};
+    league.members[userId] = "member";
+    store.upsertLeague(league);
+
+    // revoke invite after acceptance
+    store.revokeInvite(invite.id);
+
+    return NextResponse.json(
+      { ok: true, accepted: { token, leagueId: invite.leagueId, userId } },
+      { status: 200 }
+    );
   } catch (err: any) {
-    const status = Number(err?.status) || 500;
-    const message = err?.message || "Failed to accept invite";
-    console.error("[/api/invites/accept] error:", err);
-    return NextResponse.json({ ok: false, error: message }, { status });
+    return NextResponse.json(
+      { ok: false, error: err?.message || String(err) },
+      { status: 500 }
+    );
   }
 }
 
-// Optional visibility endpoint for quick debugging of the stub store.
-// Keep these exports to satisfy earlier imports you had in this file.
-export { LEAGUES, INVITES };
+/**
+ * IMPORTANT:
+ * Do NOT export anything else from this module (no store objects, helpers, etc.).
+ * Next.js validates API route exports and will fail the build if extra symbols leak.
+ */
