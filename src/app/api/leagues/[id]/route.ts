@@ -1,111 +1,70 @@
-// app/api/leagues/[id]/route.ts
+/**
+ * REST item for a single league.
+ * - GET    /api/leagues/:id         → fetch league
+ * - PATCH  /api/leagues/:id         → update basic fields (e.g., name)
+ * - DELETE /api/leagues/:id         → soft-delete league (dev)
+ */
+
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseRoute, jsonWithRes } from "@/lib/supabaseServer";
-import slugify from "slugify";
+import { getStore, type League } from "@/app/api/test/_store";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export const dynamic = "force-dynamic" as const;
+export const runtime = "nodejs" as const;
 
-const USE_SUPABASE = process.env.NEXT_PUBLIC_USE_SUPABASE === "1";
-
-// Reuse interfaces
-interface League {
-  id: string;
-  name: string;
-  season: string;
-  ruleset: string | null;
-  is_public: boolean;
-  created_at: string;
-  created_by: string;
-  slug?: string;
+/** GET: fetch one league by id */
+export async function GET(_: Request, ctx: { params: { id: string } }) {
+  const { id } = ctx.params;
+  const store = getStore();
+  const league = store.getLeague(id);
+  if (!league) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+  return NextResponse.json({ ok: true, league }, { status: 200 });
 }
 
-interface Membership {
-  league_id: string;
-  user_id: string;
-  role: string;
-  created_at: string;
-}
+/** PATCH: update limited fields (currently `name`) */
+export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
+  try {
+    const { id } = ctx.params;
+    const body = await req.json().catch(() => ({}));
+    const store = getStore();
+    const league = store.getLeague(id);
 
-interface User {
-  id: string;
-}
+    if (!league) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
-// Supabase result types
-interface QueryResult {
-  data: League | null;
-  error: any;
-}
+    const updated: League = {
+      ...league,
+      name: body.name ? String(body.name).trim() : league.name,
+    };
 
-interface MemResult {
-  data: { role: string } | null;
-  error: any;
+    store.upsertLeague(updated);
+    return NextResponse.json({ ok: true, league: updated }, { status: 200 });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: err?.message || String(err) }, { status: 500 });
+  }
 }
-
-// Global in-memory (shared across routes)
-declare global {
-  var inMemoryLeagues: League[];
-  var inMemoryMembers: Membership[];
-  var nextId: number;
-}
-if (typeof window === 'undefined') {
-  (globalThis as any).inMemoryLeagues = (globalThis as any).inMemoryLeagues || [];
-  (globalThis as any).inMemoryMembers = (globalThis as any).inMemoryMembers || [];
-  (globalThis as any).nextId = (globalThis as any).nextId || 1;
-}
-const inMemoryLeagues = (globalThis as any).inMemoryLeagues as League[];
-const inMemoryMembers = (globalThis as any).inMemoryMembers as Membership[];
 
 /**
- * GET /api/leagues/[id]
- * Fetches single league by id/slug, role-guarded.
+ * DELETE: soft-delete league (dev)
+ * Our store has no `deleteLeague`, so we "tombstone" it by renaming and
+ * leaving members intact (keeps tests stable; no hard deletes).
  */
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const { client: sb, response } = supabaseRoute(req);
-  const leagueKey = params.id;
+export async function DELETE(_: NextRequest, ctx: { params: { id: string } }) {
+  const { id } = ctx.params;
+  const store = getStore();
+  const league = store.getLeague(id);
+  if (!league) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
-  // Auth
-  let user: User | null = null;
-  if (USE_SUPABASE) {
-    const { data: { user: u }, error: uerr } = await sb.auth.getUser();
-    if (uerr) return jsonWithRes(response, { error: uerr.message }, 500);
-    user = u ? { id: u.id } : null;
-  } else {
-    user = { id: process.env.E2E_TEST_USER_ID || "stub-user-1" };
-  }
-  if (!user) return jsonWithRes(response, { error: "Unauthorized" }, 401);
+  const tombstoned: League = {
+    ...league,
+    name: league.name.endsWith(" (removed)") ? league.name : `${league.name} (removed)`,
+  };
 
-  if (USE_SUPABASE) {
-    // Real: By id (slug TODO)
-    const leagueRes: QueryResult = await sb
-      .from("leagues")
-      .select("id, name, season, ruleset, is_public, created_at, created_by")
-      .eq("id", leagueKey)
-      .maybeSingle() as QueryResult;
+  store.upsertLeague(tombstoned);
 
-    if (leagueRes.error || !leagueRes.data) return jsonWithRes(response, { error: "League not found" }, 404);
+  // Optionally: you can also revoke outstanding invites for this league.
+  // (We avoid mutating arrays directly to keep store typing happy.)
+  // for (const inv of store.INVITES.filter(i => i.leagueId === id)) {
+  //   store.revokeInvite(inv.id);
+  // }
 
-    const data = leagueRes.data;
-
-    // Role
-    const memResult: MemResult = await sb
-      .from("league_members")
-      .select("role")
-      .eq("league_id", data.id)
-      .eq("user_id", user.id)
-      .single() as MemResult;
-
-    if (memResult.error || !memResult.data) return jsonWithRes(response, { error: "Access denied" }, 403);
-
-    return jsonWithRes(response, { ok: true, league: { ...data, role: memResult.data.role } });
-  } else {
-    // In-memory: By id or slug
-    const league = inMemoryLeagues.find((l) => l.id === leagueKey || l.slug === leagueKey) ?? null;
-    if (!league) return NextResponse.json({ error: "League not found" }, { status: 404 });
-
-    const membership = inMemoryMembers.find((m) => m.league_id === league.id && m.user_id === user.id) ?? null;
-    if (!membership) return NextResponse.json({ error: "Access denied" }, { status: 403 });
-
-    return NextResponse.json({ ok: true, league: { ...league, role: membership.role } });
-  }
+  return NextResponse.json({ ok: true, removed: id, softDeleted: true }, { status: 200 });
 }

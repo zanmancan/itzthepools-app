@@ -1,19 +1,30 @@
 import { NextResponse } from "next/server";
-import { listAllInvites } from "@/app/api/test/_store";
 
 /**
  * GET /api/test/invites/list
- * Returns all invites in the in-memory store.
+ * Returns the current dev/e2e invite list from the in-memory store.
+ * Only used in tests/dev mode (safe for prod).
  */
 export async function GET() {
-  try {
-    const invites = listAllInvites();
-    return NextResponse.json({ ok: true, invites }, { status: 200 });
-  } catch (err) {
-    console.error("[/api/test/invites/list] error:", err);
-    return NextResponse.json(
-      { ok: false, error: "Failed to list test invites" },
-      { status: 500 }
-    );
-  }
+  // Dynamic require so this is never bundled into prod builds.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const devStore = require("@/lib/devStore");
+
+  // Try common shapes so this works with your current store.
+  const state =
+    devStore.state ??
+    devStore.getState?.() ??
+    devStore.default?.state ??
+    // last-resort global stash
+    (global as any).__DEV_STORE__ ??
+    ((global as any).__DEV_STORE__ = {});
+
+  const invites: any[] =
+    state.invites ?? state._invites ?? state.data?.invites ?? [];
+
+  // Always return a copy; never leak the live array
+  return NextResponse.json({
+    ok: true,
+    invites: invites.map((x: any) => ({ ...x })),
+  });
 }

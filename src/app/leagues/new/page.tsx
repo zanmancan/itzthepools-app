@@ -1,118 +1,119 @@
 "use client";
 
 /**
- * Create League (Dev/E2E-friendly)
- * - Validates: name must be at least 3 characters (trimmed)
- * - On invalid: shows a toast with phrase the spec asserts: "at least 3 characters"
- * - On success (dev/E2E): navigates to a fake league route so the spec can assert URL change
+ * Create League page used by E2E tests.
+ *
+ * Behaviour:
+ *  - Validates name length (≥ 3 trimmed chars) and shows a toast on failure.
+ *  - POSTs to /api/leagues and expects a response shaped like:
+ *      { ok: true, league: { id: string, name: string } }
+ *  - Navigates to /leagues/:id using the ID from the response.
+ *    (We also accept a couple of legacy shapes just in case.)
+ *
+ * Test hooks:
+ *  - [data-testid="league-name-input"]
+ *  - [data-testid="create-league"]
+ *  - [data-testid="toast"]
  */
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-function isTestLike() {
-  // In our dev/E2E setup we always behave as "test-like"
-  return true;
+function normalizeId(json: any): string | null {
+  // Prefer the canonical shape: { league: { id } }
+  const id =
+    json?.league?.id ??
+    json?.id ??                // legacy
+    json?.leagueId ??          // very old
+    json?.slug ?? null;        // very old
+  return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-export default function CreateLeaguePage() {
-  const router = useRouter();
+export default function NewLeaguePage() {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const router = useRouter();
 
-  function showToast(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2200);
-  }
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setToast(null);
 
-  async function onSubmit() {
     const trimmed = name.trim();
-
-    // EXACT copy expected by the spec
     if (trimmed.length < 3) {
-      showToast("Name must be at least 3 characters.");
+      // ⚠️ The spec asserts on the wording “at least 3 characters”
+      setToast("Name must be at least 3 characters");
       return;
     }
 
-    setSubmitting(true);
     try {
-      // Toggle: Real API if NEXT_PUBLIC_E2E_REAL=1 (client-exposed env); else fake for pure determinism
-      if (process.env.NEXT_PUBLIC_E2E_REAL === "1") {
-        // Real mode: Hit API, get real ID/slug
-        const res = await fetch("/api/leagues", {  // Match our route: POST /api/leagues
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: trimmed }),
-        });
-        const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-        router.push(`/leagues/${json.leagueId || json.slug}`);  // Use id or slug from response
-        return;
+      setSubmitting(true);
+
+      // Always hit the dev stubbed REST endpoint
+      const res = await fetch("/api/leagues", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+        cache: "no-store",
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.error || `HTTP ${res.status}`);
       }
 
-      // Test-like fallback (your original: fake slug)
-      if (isTestLike()) {
-        const slugBase = trimmed
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "");
-        const leagueId = `lg_${slugBase || "new"}_${Math.floor(
-          Math.random() * 90_000 + 10_000
-        )}`;
-
-        router.push(`/leagues/${leagueId}`);
-        return;
+      const id = normalizeId(json);
+      if (!id) {
+        // Robust error so failures are obvious in UI & Playwright trace
+        throw new Error("Create league responded without an id");
       }
 
-      // Future full-real (no env toggle)
-      // ... (your commented block, if needed)
-    } catch (e: any) {
-      showToast(e?.message || "Unable to create league right now.");
+      router.push(`/leagues/${encodeURIComponent(id)}`);
+    } catch (err: any) {
+      console.error("[/leagues/new] create failed:", err);
+      setToast(err?.message || "Something went wrong creating the league");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main className="mx-auto max-w-xl p-6">
-      <h1 className="mb-6 text-3xl font-bold">Create a League</h1>
+    <main className="p-8 max-w-xl mx-auto space-y-6">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-semibold">Create a League</h1>
+        <p className="text-sm opacity-70">
+          Give your league a name and we&apos;ll take you to its page.
+        </p>
+      </header>
 
       {toast && (
         <div
           role="alert"
           data-testid="toast"
-          className="mb-3 rounded-md border border-red-700 bg-red-950/60 px-3 py-2 text-sm text-red-200"
+          className="rounded-lg border border-red-700/60 bg-red-900/30 p-3 text-sm"
         >
           {toast}
         </div>
       )}
 
-      <form
-        className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSubmit();
-        }}
-      >
-        <label className="block text-sm">
-          League name
+      <form onSubmit={onSubmit} className="space-y-4">
+        <label className="block space-y-2">
+          <span className="text-sm">League name</span>
           <input
-            type="text"
+            data-testid="league-name-input"
             value={name}
             onChange={(e) => setName(e.currentTarget.value)}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2"
-            placeholder="Team_Test_1"
-            // >>> this id matches the spec
-            data-testid="league-name-input"
+            placeholder="e.g., My League"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-700"
+            autoFocus
           />
         </label>
 
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-xl border border-sky-700 bg-sky-800/50 px-4 py-2 text-sm font-medium text-sky-100 hover:bg-sky-800/70 disabled:opacity-60"
           data-testid="create-league"
+          className="rounded-md border border-sky-700 bg-sky-800 px-4 py-2 text-sm font-medium text-sky-100 hover:bg-sky-800/80 disabled:opacity-60"
         >
           {submitting ? "Creating…" : "Create"}
         </button>

@@ -1,55 +1,56 @@
-// src/app/api/test/seed/route.ts — Deterministic Fixture for Invite Flow (League + Token)
-import { NextRequest, NextResponse } from "next/server";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-const USE_SUPABASE = process.env.NEXT_PUBLIC_USE_SUPABASE === "1";
-
-// Global in-memory for invites (shared with other /api/test/*)
-declare global {
-  var testInvites: Record<string, { league_id: string; email: string; status: 'pending' | 'used' | 'expired'; created_at: string }>;
-}
-if (typeof window === 'undefined') {
-  (globalThis as any).testInvites = (globalThis as any).testInvites || {};
-}
-const testInvites = (globalThis as any).testInvites as Record<string, { league_id: string; email: string; status: 'pending' | 'used' | 'expired'; created_at: string }>;
-
 /**
- * GET /api/test/seed
- * Params: leagueId (string), email (string), used? (true for sub-test 2)
- * Seeds invite token for league (deterministic for E2E)
- * Returns {ok: true, invite: {token, league_id, email, status}}
+ * Dev-only seed endpoint.
+ * - POST /api/test/seed  → seeds a couple of leagues and invites
+ *
+ * Safe to call multiple times (idempotent-ish).
  */
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const leagueId = searchParams.get('leagueId');
-  const email = searchParams.get('email');
-  const used = searchParams.get('used') === 'true';
 
-  if (!leagueId || !email) {
-    return NextResponse.json({ ok: false, error: 'leagueId and email required' }, { status: 400 });
-  }
+import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { getStore, type League } from "@/app/api/test/_store";
 
-  // Deterministic token for flow (tk_elfmc6uvg1 for used case)
-  const token = 'tk_elfmc6uvg1';  // Fixed for spec
+export const dynamic = "force-dynamic" as const;
+export const runtime = "nodejs" as const;
 
-  // Init if undefined
-  if (testInvites[token] === undefined) {
-    testInvites[token] = {
-      league_id: leagueId,
-      email,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-    };
-  }
+const tok = () => `tok_${randomUUID()}`;
 
-  // Mark used for sub-test 2
-  if (used) {
-    testInvites[token].status = 'used';
-  }
+export async function POST() {
+  const store = getStore();
 
-  const invite = testInvites[token];
+  // Create two demo leagues if not present
+  const ensureLeague = (id: string, name: string, ownerId = "owner_1"): League => {
+    const found = store.getLeague(id);
+    if (found) return found;
+    const lg: League = { id, name, ownerId, members: { [ownerId]: "owner" } };
+    store.upsertLeague(lg);
+    return lg;
+  };
 
-  return NextResponse.json({ ok: true, invite });
+  const a = ensureLeague("lg_alpha", "Alpha League");
+  const b = ensureLeague("lg_beta", "Beta League");
+
+  // Add a couple of invites if not present
+  const ensureInvite = (leagueId: string, email: string) => {
+    const exists = store.INVITES.some(
+      (i) => i.leagueId === leagueId && i.email.toLowerCase() === email.toLowerCase()
+    );
+    if (!exists) {
+      store.addInvite({ leagueId, email, role: "member", token: tok() });
+    }
+  };
+
+  ensureInvite(a.id, "alpha1@example.com");
+  ensureInvite(a.id, "alpha2@example.com");
+  ensureInvite(b.id, "beta1@example.com");
+
+  return NextResponse.json(
+    {
+      ok: true,
+      seeded: {
+        leagues: [a.id, b.id],
+        invites: 3,
+      },
+    },
+    { status: 200 }
+  );
 }

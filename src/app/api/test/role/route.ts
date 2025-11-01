@@ -1,50 +1,49 @@
-// src/app/api/test/role/route.ts
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-/**
- * Test-only helper: returns the role for a given leagueId.
- * Deterministic by league only (user-agnostic), to match E2E specs.
- *
- * GET /api/test/role?leagueId=lg_owner
- * -> { ok: true, leagueId, role: "owner" }
- */
+// NOTE: no "force-dynamic" export; keep this route simple & compatible.
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-type Role = "owner" | "admin" | "member";
-type Ok = { ok: true; leagueId: string; role: Role | null };
-type Err = { ok: false; error: string };
-
-function json(body: Ok | Err, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-function roleForLeague(leagueId: string): Role | null {
-  switch (leagueId) {
-    case "lg_owner":
-      return "owner";
-    case "lg_admin":
-      return "admin";
-    case "lg_member":
-      return "member";
-    case "lg_non_owner":
-      return "member";
-    default:
-      return "member";
-  }
-}
-
-export async function GET(req: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const leagueId = req.nextUrl.searchParams.get("leagueId")?.trim();
-    if (!leagueId) return json({ ok: false, error: "Missing leagueId" }, 400);
-    const role = roleForLeague(leagueId);
-    return json({ ok: true, leagueId, role });
-  } catch (e: any) {
-    return json({ ok: false, error: e?.message || "Unhandled error" }, 500);
+    const { role, leagueId } = await req.json();
+
+    if (!role || !["owner", "member", "admin"].includes(role)) {
+      return NextResponse.json(
+        { ok: false, error: "Invalid role. Use 'owner' | 'member' | 'admin'." },
+        { status: 400 }
+      );
+    }
+
+    // Dynamic require to avoid pulling this into prod bundles.
+    // Your repo already uses "@/lib/devStore" on dev pages.
+    // We update the same state object it reads from.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const devStore = require("@/lib/devStore");
+
+    // Try a few common shapes so this works with your current dev store.
+    if (typeof devStore.setRole === "function") {
+      // Preferred: devStore.setRole(role: string, leagueId?: string)
+      devStore.setRole(role, leagueId);
+    } else if (devStore.state) {
+      devStore.state.role = role;
+      if (leagueId) devStore.state.improfile = leagueId;
+    } else {
+      // Safe fallback in case your store uses a global
+      // (won't affect prod; only used by tests under NEXT_PUBLIC_E2E_DEV_SAFETY=1)
+      // @ts-expect-error — intentional: Next.js type gap here during test shim
+      global.__DEV_STORE__ = global.__DEV_STORE__ ?? {};
+      // @ts-expect-error — intentional: Next.js type gap here during test shim
+      global.__DEV_STORE__.role = role;
+      if (leagueId) {
+        // @ts-expect-error — intentional: Next.js type gap here during test shim
+        global.__DEV_STORE__.improfile = leagueId;
+      }
+    }
+
+    return NextResponse.json({ ok: true, role, improfile: leagueId ?? null });
+  } catch (err: any) {
+    return NextResponse.json(
+      { ok: false, error: err?.message ?? "Unknown error" },
+      { status: 500 }
+    );
   }
 }

@@ -1,3 +1,4 @@
-// Back-compat shim: older tests may call /api/test/invite/seed
-// Delegate to the canonical seeder implemented at /api/test/seed-invite.
-export { GET, runtime, dynamic } from "../../seed-invite/route";
+// Only POST exists in the shared seeder.
+export { POST } from "../../seed-invite/route";
+export const dynamic = "force-dynamic" as const;
+export const runtime  = "nodejs" as const;

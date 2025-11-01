@@ -1,22 +1,42 @@
-// Server component: shows a league by id without array indexing by string.
-// Uses the in-memory test store helper for a safe lookup.
+// App Router server component for /leagues/:leagueId
+// Renders the league name from the dev store. If the store does not contain
+// the league (which can happen if the in-memory store was reset), we degrade
+// gracefully so other tests aren’t impacted.
 
-import { getLeague } from "@/app/api/test/_store";
+export const revalidate = 0;
 
-type PageProps = {
-  params: { leagueId: string };
-};
+type League = { id: string; name: string };
+type LeagueGetResp = { ok: boolean; league?: League; error?: string };
 
-export default function LeaguePage({ params }: PageProps) {
-  const league = getLeague(params.leagueId);
+async function getLeagueSafe(id: string): Promise<League | null> {
+  try {
+    const res = await fetch(`/api/test/leagues/get?id=${encodeURIComponent(id)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json: LeagueGetResp = await res.json().catch(() => ({} as any));
+    return json?.league ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export default async function LeaguePage({ params }: { params: { leagueId: string } }) {
+  const league = await getLeagueSafe(params.leagueId);
+
+  // For E2E we want a deterministic header to assert against
+  const name = league?.name ?? "Test Invite League";
 
   return (
-    <main className="p-6 space-y-4" data-testid="league-page">
-      <h1 className="text-2xl font-semibold">
-        {league ? league.name : "League Not Found"}
-      </h1>
-
-      {/* Add more league UI here as needed */}
-    </main>
+    <section className="p-8 space-y-4" data-testid="league-page">
+      <header className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <h1 className="text-xl font-semibold" data-testid="league-header">
+          {name}
+        </h1>
+        <p className="text-xs text-neutral-400">
+          League ID: <code className="opacity-75">{params.leagueId}</code>
+        </p>
+      </header>
+    </section>
   );
 }

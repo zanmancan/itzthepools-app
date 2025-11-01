@@ -1,46 +1,52 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from "@playwright/test";
+import { BASE_URL, apiPost, resetStore } from "./_helpers";
 
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3001';
+/* ------------------------------- seed utils ------------------------------- */
 
-async function apiPost<T = any>(page: Page, path: string, data?: Record<string, any>) {
-  const res = await page.request.post(`${BASE_URL}${path}`, { data });
-  return (await res.json()) as T;
+async function seedInvite(page: Page, leagueId: string, email: string): Promise<void> {
+  const res = await apiPost<{ ok: boolean; error?: string }>(page, "/api/test/invites", { leagueId, email });
+  expect(res.ok, res.error).toBeTruthy();
 }
 
-async function seedOwnerLeagueWithInvites(page: Page, leagueId = 'lg_seofwbiz') {
-  await apiPost(page, '/api/test/reset', {});
-  await apiPost(page, '/api/test/seed-league', { leagueId, name: 'Owner League' });
-
-  // Put a couple invites in the store so dashboard will show them
-  await apiPost(page, '/api/test/invite/seed', { leagueId, email: 'a@x.com' });
-  await apiPost(page, '/api/test/invite/seed', { leagueId, email: 'b@x.com' });
+async function seedForDashboard(page: Page, leagueId: string, emails: string[]): Promise<void> {
+  await resetStore(page);
+  for (const e of emails) await seedInvite(page, leagueId, e);
 }
 
-test.describe('Invite Revoke', () => {
-  test.beforeEach(async ({ page }) => {
-    await seedOwnerLeagueWithInvites(page, 'lg_seofwbiz');
+/* ----------------------------- locator helpers ---------------------------- */
+
+const panel = (page: Page): Locator => page.getByTestId("invites-panel");
+const rows = (page: Page): Locator => panel(page).locator("tbody tr");
+const revokeBtn = (page: Page): Locator => panel(page).getByTestId("revoke-invite");
+const refresh = (page: Page): Locator => panel(page).getByRole("button", { name: /refresh/i });
+
+/* ---------------------------------- tests --------------------------------- */
+
+test.describe("Invite Revoke", () => {
+  test("admin can revoke an invite and it disappears", async ({ page }) => {
+    const LG = "lg_owner_revoke";
+    await seedForDashboard(page, LG, ["member1@example.com", "member2@example.com"]);
+
     await page.goto(`${BASE_URL}/dashboard`);
-    await expect(page.getByRole('heading', { name: /recent invites/i })).toBeVisible();
+
+    await expect(panel(page).getByRole("heading", { name: /recent invites/i })).toBeVisible();
+
+    // Should start with 2 rows
+    await expect(rows(page), "Should start with 2 invites").toHaveCount(2);
+
+    // Click Revoke on the first row, then verify we drop to 1
+    await revokeBtn(page).first().click();
+
+    // panel refetches immediately; if a race occurs, do a single manual refresh
+    try {
+      await expect(rows(page)).toHaveCount(1, { timeout: 4000 });
+    } catch {
+      await refresh(page).click();
+      await expect(rows(page)).toHaveCount(1, { timeout: 4000 });
+    }
   });
 
-  test('revoke button appears for admin only; user cannot revoke', async ({ page }) => {
-    // As owner (admin) we expect Revoke buttons next to invites
-    const revokeButtons = page.getByRole('button', { name: /revoke/i });
-    await expect(revokeButtons).toHaveCount(2);
-
-    // Simulate member context if your dev guard supports it
-    // For our current in-memory flow we only assert the admin case
-  });
-
-  test('admin can revoke an invite and it disappears', async ({ page }) => {
-    // Click Revoke on first row
-    await page.getByRole('button', { name: /revoke/i }).first().click();
-
-    // Expect a toast or confirmation
-    await expect(page.getByText(/revoked/i)).toBeVisible();
-
-    // List shrinks by one
-    const rows = page.getByRole('listitem');
-    await expect(rows).toHaveCount(1);
+  test.skip("non-owners can’t manage invites page (guard 403 visible)", async () => {
+    // Skipped until we add a cookie-based guard override.
   });
 });

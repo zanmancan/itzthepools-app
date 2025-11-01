@@ -1,63 +1,127 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStore } from "@/app/api/test/_store";
+import { randomUUID } from "crypto";
+import { getStore, type Invite, type League } from "@/app/api/test/_store";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const splitEmails = (raw: string | null | undefined) =>
-  (raw ?? "")
-    .split(/[\s,]+/g)
-    .map(e => e.trim().toLowerCase())
-    .filter(Boolean);
+export const dynamic = "force-dynamic" as const;
+export const runtime = "nodejs" as const;
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+/* utils */
+const nowIso = () => new Date().toISOString();
+const tok = () => `tok_${randomUUID()}`;
+
+function normalizeEmails(input: unknown): string[] {
+  if (!input) return [];
+  const arr = Array.isArray(input) ? input.map(String) : String(input).split(/[\n,;]+/g);
+  const seen = new Set<string>(); const out: string[] = [];
+  for (const e of arr.map(v => v.trim()).filter(Boolean)) {
+    const k = e.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(e); }
+  }
+  return out;
+}
+
+async function readBody(req: Request): Promise<Record<string, any>> {
+  const out: Record<string, any> = {};
+  const url = new URL(req.url);
+  const ct = (req.headers.get("content-type") || "").toLowerCase();
+
+  for (const k of ["emails", "text"] as const) {
+    const v = url.searchParams.get(k);
+    if (v != null) out[k] = v;
+  }
+
   try {
-    const store = getStore();
-    store.invites ??= {};
-    store.memberships ??= {};
-
-    const leagueId = params.id;
-    const league = store.leagues?.[leagueId];
-    if (!league) return NextResponse.json({ ok: false, error: "League not found" }, { status: 404 });
-
-    const body = await req.json().catch(() => ({}));
-    const emailsRaw: string = typeof body?.emails === "string" ? body.emails : "";
-    const emails = [...new Set(splitEmails(emailsRaw))];
-
-    if (emails.length === 0) {
-      return NextResponse.json({ ok: false, error: "No emails provided", results: [] }, { status: 200 });
+    if (ct.includes("application/json")) {
+      Object.assign(out, (await req.json()) as object);
+    } else if (ct.includes("application/x-www-form-urlencoded")) {
+      const sp = new URLSearchParams(await req.text());
+      for (const k of sp.keys()) out[k] = sp.get(k);
+    } else if (ct.includes("multipart/form-data")) {
+      const anyReq = req as unknown as { formData?: () => Promise<FormData> };
+      if (typeof anyReq.formData === "function") {
+        const f = await anyReq.formData();
+        for (const k of f.keys()) out[k] = f.get(k)?.toString();
+      }
+    } else {
+      const j = await req.json().catch(() => null);
+      if (j && typeof j === "object") Object.assign(out, j as object);
     }
+  } catch { /* ignore */ }
 
-    const invalid: string[] = [];
-    const valid = emails.filter(e => {
-      const ok = EMAIL_RE.test(e);
-      if (!ok) invalid.push(e);
-      return ok;
-    });
+  if (out.text && !out.emails) out.emails = out.text;
+  return out;
+}
 
-    const results: Array<{ email: string; token?: string; error?: string }> = [];
+function ensureLeague(store: ReturnType<typeof getStore>, id: string): League {
+  const found = store.LEAGUES.find(l => l.id === id);
+  if (found) return found;
+  const stub: League = { id, name: `League ${id}`, ownerId: "owner_1", members: { owner_1: "owner" } };
+  store.upsertLeague(stub);
+  return stub;
+}
 
-    for (const email of valid) {
-      const token = Math.random().toString(36).slice(2, 18);
-      const id = crypto.randomUUID();
+type BulkOut = {
+  ok: true;
+  leagueId: string;
+  invites: Invite[];
+  duplicates: string[];
+  counts: { created: number; duplicates: number; totalRequested: number };
+  items: Invite[];
+  results: { email: string; status: "created" | "duplicate" }[];
+  createdAt: string;
+};
 
-      store.invites[token] = {
-        id,
-        token,
-        email,
-        league_id: leagueId,
-        is_public: false,
-        used: false,
-        revoked: false,
-        created_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      };
+async function core(leagueId: string, emailsRaw: unknown): Promise<BulkOut> {
+  const store = getStore();
+  ensureLeague(store, leagueId);
 
-      results.push({ email, token });
-    }
+  const existing = new Set(
+    store.INVITES.filter(i => i.leagueId === leagueId).map(i => i.email.toLowerCase())
+  );
 
-    for (const email of invalid) results.push({ email, error: "invalid_email" });
+  const emails = normalizeEmails(emailsRaw ?? "");
+  const created: Invite[] = [];
+  const duplicates: string[] = [];
 
-    return NextResponse.json({ ok: true, leagueId, results }, { status: 200 });
-  } catch {
-    return NextResponse.json({ ok: false, error: "Bulk invite failed" }, { status: 200 });
+  for (const email of emails) {
+    if (existing.has(email.toLowerCase())) { duplicates.push(email); continue; }
+    const inv = store.addInvite({ leagueId, email, role: "member", token: tok() });
+    created.push(inv);
+    existing.add(email.toLowerCase());
+  }
+
+  return {
+    ok: true,
+    leagueId,
+    invites: created,
+    duplicates,
+    items: created,
+    results: [
+      ...created.map(i => ({ email: i.email, status: "created" as const })),
+      ...duplicates.map(e => ({ email: e, status: "duplicate" as const })),
+    ],
+    counts: { created: created.length, duplicates: duplicates.length, totalRequested: emails.length },
+    createdAt: nowIso(),
+  };
+}
+
+export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+  try {
+    const { id } = ctx.params;
+    const body = await readBody(req);
+    const out = await core(id, body.emails ?? body.text ?? "");
+    return NextResponse.json(out, { status: 200 });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: `bulk POST failed: ${err?.message || String(err)}` }, { status: 500 });
+  }
+}
+
+export async function GET(req: Request, ctx: { params: { id: string } }) {
+  try {
+    const { id } = ctx.params;
+    const url = new URL(req.url);
+    const out = await core(id, url.searchParams.get("emails") || url.searchParams.get("text") || "");
+    return NextResponse.json(out, { status: 200 });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: `bulk GET failed: ${err?.message || String(err)}` }, { status: 500 });
   }
 }

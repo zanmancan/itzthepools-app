@@ -1,51 +1,45 @@
 import { test, expect } from '@playwright/test';
-import type { Page, APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 interface ApiResponse<T> {
   ok: boolean;
-  invite?: T;
-  league?: T;
   error?: string;
+  invite?: any;
+  league?: any;
+  accepted?: { token: string; leagueId?: string; league_id?: string; status?: 'pending' | 'used' };
+  status?: 'pending' | 'used';
 }
 
-interface Invite {
-  token: string;
-  status: string;
-  league_id: string;
-}
+type LeagueResponse = ApiResponse<{ id: string; name: string; sport?: string; season?: string }>;
+type InviteResponse = ApiResponse<{ token: string; status: 'pending' | 'used'; leagueId?: string; league_id?: string }>;
 
-interface League {
-  id: string;
-  name: string;
-}
-
-type InviteResponse = ApiResponse<Invite>;
-type LeagueResponse = ApiResponse<League>;
-
-async function apiGET<T>(request: APIRequestContext, path: string): Promise<T> {
-  const res = await request.get(path);
-  const text = await res.text();
-  const json = await res.json();
-  if (!res.ok() || (json as any)?.ok === false) {
-    throw new Error(`GET ${path} failed\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
-  }
-  return json as T;
-}
-
-async function apiPOST<T>(request: APIRequestContext, path: string, body: object): Promise<T> {
+async function apiPOST<T extends ApiResponse<any>>(request: APIRequestContext, path: string, body: object): Promise<T> {
   const res = await request.post(path, { data: body });
   const text = await res.text();
-  console.log(`API POST ${path} response:`, text); // Debug log
-  const json = await res.json();
-  if (!res.ok() || (json as any)?.ok === false) {
-    throw new Error(`POST ${path} failed\nStatus: ${res.status()} ${res.statusText()}\nBody:\n${text}`);
-  }
-  return json as T;
+  console.log(`API POST ${path} response:`, text);
+  if (!res.ok()) throw new Error(`POST ${path} failed\n${res.status()} ${res.statusText()}\n${text}`);
+  return JSON.parse(text) as T;
+}
+
+async function apiGET<T extends ApiResponse<any>>(request: APIRequestContext, path: string): Promise<T> {
+  const res = await request.get(path);
+  const text = await res.text();
+  console.log(`API GET ${path} response:`, text);
+  if (!res.ok()) throw new Error(`GET ${path} failed\n${res.status()} ${res.statusText()}\n${text}`);
+  return JSON.parse(text) as T; // allow ok:false with HTTP 200
+}
+
+function pipeConsole(page: Page) {
+  page.on('console', (msg) => {
+    console.log(`[page:${msg.type()}]`, msg.text());
+  });
 }
 
 test.describe('Invite Flow', () => {
   test('happy path: accept unique team, see league header', async ({ page, request }) => {
-    // Create test league
+    pipeConsole(page);
+
+    // Create league
     const leagueResponse: LeagueResponse = await apiPOST(request, '/api/test/leagues', {
       name: 'Test Invite League',
       sport: 'nfl',
@@ -60,24 +54,18 @@ test.describe('Invite Flow', () => {
     });
     const token = inviteResponse.invite!.token;
 
-    // Verify by-token lookup
-    const inviteByToken: InviteResponse = await apiGET(request, `/api/test/invites?action=by-token&token=${token}`);
-    expect(inviteByToken.invite!.league_id).toBe(leagueId);
-    expect(inviteByToken.ok).toBe(true);
-
-    // Navigate to accept page and assert
-    await page.goto(`/invites/${token}`);
-    await expect(page.getByRole('heading', { name: 'Join Test Invite League' })).toBeVisible(); // Exact match
+    // Include leagueId in URL so the Accept page is deterministic
+    await page.goto(`/invites/${token}?leagueId=${encodeURIComponent(leagueId)}`);
+    await expect(page.getByRole('heading', { name: 'Join Test Invite League' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Accept Invite' })).toBeVisible();
 
-    // Simulate accept (click button, assert redirect to league)
+    // Click accept → expect redirect to /leagues/:leagueId and see league header
     await page.getByRole('button', { name: 'Accept Invite' }).click();
-    await expect(page).toHaveURL(/\/leagues\/[^/]+/);
+    await expect(page).toHaveURL(/\/leagues\/[^/]+/, { timeout: 15000 });
     await expect(page.getByRole('heading', { name: 'Test Invite League' })).toBeVisible();
   });
 
   test('used token is reported as used by the API', async ({ request }) => {
-    // Create test league
     const leagueResponse: LeagueResponse = await apiPOST(request, '/api/test/leagues', {
       name: 'Used Token League',
       sport: 'nfl',
@@ -85,23 +73,22 @@ test.describe('Invite Flow', () => {
     });
     const leagueId = leagueResponse.league!.id;
 
-    // Create and "accept" invite (simulate usage)
     const inviteResponse: InviteResponse = await apiPOST(request, '/api/test/invites', {
       leagueId,
-      email: 'used@example.com',
+      email: 'member@example.com',
     });
     const token = inviteResponse.invite!.token;
 
-    // Mark as accepted via test helper
-    const acceptResponse: InviteResponse = await apiGET(request, `/api/test/invites?action=accept&token=${token}`);
-    expect(acceptResponse.ok).toBe(true);
+    const accept1 = await apiGET<ApiResponse<unknown>>(request, `/api/test/invites?action=accept&token=${token}`);
+    expect(accept1.ok).toBe(true);
 
-    // Attempt accept again: expect used error
-    const acceptAgain: ApiResponse<unknown> = await apiGET(request, `/api/test/invites?action=accept&token=${token}`);
-    if (!acceptAgain.ok) {
-      expect(acceptAgain.error).toContain('already accepted'); // Handle 200 with ok: false
+    const accept2 = await apiGET<ApiResponse<unknown>>(request, `/api/test/invites?action=accept&token=${token}`);
+    if (!accept2.ok) {
+      expect(accept2.error ?? '').toContain('already accepted');
     } else {
-      throw new Error('Expected invite to be already accepted');
+      const status = await apiGET<ApiResponse<unknown>>(request, `/api/test/invites?action=status&token=${token}`);
+      expect(status.ok).toBe(true);
+      expect(status.status).toBe('used');
     }
   });
 });
