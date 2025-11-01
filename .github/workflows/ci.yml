@@ -5,14 +5,19 @@ on:
     branches: [main, master, '**/*']
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Do NOT set NODE_ENV=production here; we need devDependencies (typescript, eslint, etc.)
     env:
       CI: '1'
-      NODE_ENV: production
       NEXT_PUBLIC_E2E_DEV_SAFETY: '1'
       E2E_BASE_URL: http://localhost:3001
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +28,7 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install deps
+      - name: Install deps (include devDependencies)
         run: npm ci
 
       - name: Install Playwright browsers
