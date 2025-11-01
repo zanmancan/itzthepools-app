@@ -13,13 +13,8 @@
 
 import { NextResponse, NextRequest } from "next/server";
 import { randomUUID } from "crypto";
-import {
-  getStore,
-  type Invite,
-  type League,
-} from "@/app/api/test/_store";
+import { getStore, type Invite, type League } from "@/app/api/test/_store";
 
-/** Always dynamic (dev stub) */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -69,28 +64,32 @@ async function parseBody(req: Request): Promise<Record<string, any>> {
   const url = new URL(req.url);
 
   // always pick up query, in case caller sends via GET or mixes with POST
-  for (const k of ["leagueId", "emails", "text"]) {
+  for (const k of ["leagueId", "emails", "text"] as const) {
     const v = url.searchParams.get(k);
     if (v != null) out[k] = v;
   }
 
   const ct = (req.headers.get("content-type") || "").toLowerCase();
+
   try {
     if (ct.includes("application/json")) {
       const j = await req.json();
-      if (j && typeof j === "object") Object.assign(out, j);
+      if (j && typeof j === "object") Object.assign(out, j as object);
     } else if (ct.includes("application/x-www-form-urlencoded")) {
       const t = await req.text();
       const sp = new URLSearchParams(t);
       for (const k of sp.keys()) out[k] = sp.get(k);
     } else if (ct.includes("multipart/form-data")) {
-      // ts-expect-error: formData on Next's Request at runtime
-      const form = await (req as any).formData?.();
-      if (form) for (const k of form.keys()) out[k] = form.get(k)?.toString();
+      // In the App Router, Request typically has formData(); add a runtime guard just in case.
+      const anyReq = req as unknown as { formData?: () => Promise<FormData> };
+      if (typeof anyReq.formData === "function") {
+        const form = await anyReq.formData();
+        for (const k of form.keys()) out[k] = form.get(k)?.toString();
+      }
     } else {
       // Be tolerant: sometimes callers forget headers but still send JSON
       const j = await req.json().catch(() => null);
-      if (j && typeof j === "object") Object.assign(out, j);
+      if (j && typeof j === "object") Object.assign(out, j as object);
     }
   } catch {
     // ignore malformed bodies; we still may have query params
@@ -165,7 +164,6 @@ async function bulkCreateCore(leagueId: string, emailsRaw?: unknown): Promise<Bu
     existing.add(email.toLowerCase());
   }
 
-  // Friendly result that matches multiple consumer expectations
   return {
     ok: true,
     leagueId,
