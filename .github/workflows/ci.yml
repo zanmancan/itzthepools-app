@@ -12,11 +12,10 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    # Do NOT set NODE_ENV=production here; we need devDependencies (typescript, eslint, etc.)
     env:
       CI: '1'
-      NEXT_PUBLIC_E2E_DEV_SAFETY: '1'
       E2E_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_E2E_DEV_SAFETY: '1' # your badge/test toggle
 
     steps:
       - name: Checkout
@@ -33,6 +32,21 @@ jobs:
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
+
+      # >>> NEW: create CI-only .env.local so Next build doesn't crash
+      - name: Create .env.local for CI
+        run: |
+          cat > .env.local <<'EOF'
+          # --- Supabase (dummy) ---
+          NEXT_PUBLIC_SUPABASE_URL=https://stub.example.com
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=stub-anon-key
+          # --- NextAuth (dummy) ---
+          NEXTAUTH_URL=http://localhost:3001
+          NEXTAUTH_SECRET=dev-secret-please-change-1234567890123456
+          AUTH_SECRET=dev-secret-please-change-1234567890123456
+          # --- E2E flags ---
+          NEXT_PUBLIC_E2E_DEV_SAFETY=1
+          EOF
 
       - name: Typecheck
         run: npx tsc -p . --noEmit
